@@ -84,8 +84,8 @@ jobs:
           KABOOTAR_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KABOOTAR_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KABOOTAR_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          KABOOTAR_BUILD_PYTHON: python
         run: |
+          export KABOOTAR_BUILD_PYTHON="${pythonLocation}/bin/python"
           gradle -p client/android :app:clean :app:assembleDebug :app:assembleRelease
 
       - name: Prepare Android APK outputs
