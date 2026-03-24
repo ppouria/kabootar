@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 if command -v python3 >/dev/null 2>&1; then
+  python3 -m pip install Pillow cairosvg || echo "WARN: logo renderer dependencies failed. Using existing icon assets."
   if ! python3 build/assets/prepare_logo_assets.py; then
     echo "WARN: logo asset preparation failed. Using existing icon assets."
   fi

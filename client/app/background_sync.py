@@ -8,7 +8,6 @@ from app.runtime_debug import record_event, setup_logging
 from app.service import sync_once
 from app.settings_store import get_setting
 
-
 logger = logging.getLogger("kabootar.background")
 _STATE_LOCK = threading.Lock()
 _THREAD: threading.Thread | None = None

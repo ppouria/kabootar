@@ -1,23 +1,23 @@
-from flask import Flask, render_template, request, send_from_directory, redirect, url_for, jsonify
-from sqlalchemy import select, func
-from pathlib import Path
+import json
 import logging
-import threading
 import secrets
 import sys
-import json
+import threading
 import time
+from pathlib import Path
 
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from sqlalchemy import func, select
+
+from app.background_sync import background_sync_status, start_background_sync_loop
 from app.config import settings
 from app.db import SessionLocal, ensure_schema
+from app.dns_bridge import export_resolver_health, probe_dns_domain, push_channels_to_domains, sync_from_dns_domain
 from app.models import Channel, Message
-from app.settings_store import all_settings, set_setting, get_setting, apply_sync_cron
-from app.dns_bridge import push_channels_to_domains, probe_dns_domain, sync_from_dns_domain, export_resolver_health
+from app.runtime_debug import record_event, runtime_summary, setup_logging, snapshot_events, tail_log_lines
 from app.service import sync_once
-from app.background_sync import start_background_sync_loop, background_sync_status
+from app.settings_store import all_settings, apply_sync_cron, get_setting, set_setting
 from app.utils import normalize_tg_s_url, parse_csv
-from app.runtime_debug import runtime_summary, snapshot_events, tail_log_lines, setup_logging, record_event
-
 
 logger = logging.getLogger("kabootar.web")
 _SYNC_JOBS_LOCK = threading.Lock()

@@ -11,7 +11,7 @@ from app.db import engine
 DEFAULTS: dict[str, str] = {
     "source_mode": "direct",  # direct | dns
     "direct_channels": "",
-    "direct_proxies": os.getenv("TELEGRAM_PROXIES", ""),
+    "direct_proxies": "",
     # DNS transport client config
     "dns_password": "",  # legacy/global fallback; per-domain password is in dns_channel_routes
     "dns_client_id": "",
@@ -28,7 +28,7 @@ DEFAULTS: dict[str, str] = {
     "dns_server": "",
     "dns_port": "5533",
     "dns_sources": "",
-    "sync_interval_minutes": os.getenv("CRON_INTERVAL_MINUTES", "1"),
+    "sync_interval_minutes": "1",
 }
 
 

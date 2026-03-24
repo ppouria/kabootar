@@ -20,7 +20,7 @@ on:
       start_url:
         description: "Web URL loaded by Android app WebView"
         required: false
-        default: "https://example.com"
+        default: ""
 
 permissions:
   contents: write
@@ -47,7 +47,7 @@ jobs:
 
       - name: Prepare Kabootar Logo Assets
         run: |
-          python -m pip install Pillow
+          python -m pip install Pillow cairosvg
           python client/build/assets/prepare_logo_assets.py
 
       - name: Setup Android SDK
@@ -64,9 +64,11 @@ jobs:
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Build Debug + Release APK
+        env:
+          ANDROID_START_URL: ${{ github.event.inputs.start_url || vars.ANDROID_START_URL || 'file:///android_asset/bootstrap.html' }}
         run: |
           gradle -p client/android :app:assembleDebug :app:assembleRelease \
-            -PstartUrl="${{ github.event.inputs.start_url || 'https://example.com' }}"
+            -PstartUrl="${ANDROID_START_URL}"
 
       - name: Prepare Universal APK
         run: |

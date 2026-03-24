@@ -18,8 +18,8 @@ def _prepare_local_env() -> None:
 
 _prepare_local_env()
 
+from app.runtime_debug import record_event, setup_logging  # noqa: E402
 from app.web import create_app  # noqa: E402
-from app.runtime_debug import setup_logging, record_event  # noqa: E402
 
 
 def main() -> None:

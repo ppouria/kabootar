@@ -1,13 +1,12 @@
+import base64
 import re
 import time
-import base64
 from html import unescape
 from typing import Optional
 
 import requests
 
 from app.utils import normalize_proxy_url
-
 
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
 

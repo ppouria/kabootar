@@ -2,13 +2,23 @@
 import argparse
 import os
 import subprocess
+import sys
 
-from app.runtime_debug import setup_logging, record_event
+from app.runtime_debug import record_event, setup_logging
 
-def cmd_migrate():
+
+def _run_alembic(*args: str) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.getcwd()
-    subprocess.check_call(["alembic", "upgrade", "head"], env=env)
+    subprocess.check_call([sys.executable, "-m", "alembic", *args], env=env)
+
+
+def cmd_migrate():
+    _run_alembic("upgrade", "head")
+
+
+def cmd_check_migrations():
+    _run_alembic("check")
 
 
 def cmd_sync():
@@ -32,11 +42,13 @@ def cmd_web():
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("command", choices=["migrate", "sync", "web"])
+    p.add_argument("command", choices=["migrate", "check-migrations", "sync", "web"])
     args, _ = p.parse_known_args()
 
     if args.command == "migrate":
         cmd_migrate()
+    elif args.command == "check-migrations":
+        cmd_check_migrations()
     elif args.command == "sync":
         cmd_sync()
     elif args.command == "web":

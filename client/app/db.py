@@ -1,7 +1,7 @@
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker, DeclarativeBase
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
-from app.config import settings, ensure_data_dir
+from app.config import ensure_data_dir, settings
 
 ensure_data_dir()
 

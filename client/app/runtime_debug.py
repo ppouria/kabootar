@@ -10,7 +10,6 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import unquote
 
-
 _SETUP_LOCK = threading.Lock()
 _SETUP_DONE = False
 _EVENT_LOCK = threading.Lock()

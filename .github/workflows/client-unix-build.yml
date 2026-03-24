@@ -69,7 +69,7 @@ jobs:
               dnslib==0.9.25 \
               dnspython==2.6.1
           fi
-          python -m pip install pywebview pyinstaller Pillow
+          python -m pip install pywebview pyinstaller Pillow cairosvg
 
       - name: Prepare Kabootar Logo Assets
         run: python build/assets/prepare_logo_assets.py

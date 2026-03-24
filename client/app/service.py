@@ -1,20 +1,22 @@
 import logging
 import threading
 import time
-from typing import Optional, Callable
+from typing import Callable, Optional
 
 from sqlalchemy import select
 
-from app.config import settings
 from app.db import SessionLocal, ensure_schema
+from app.dns_bridge import load_dns_domains, push_channels_to_domains, sync_from_dns_to_main_db
 from app.models import Channel, Message
-from app.rocketchat import login as rc_login, room_id_by_name, post_message
-from app.scraper import fetch_html_with_proxies, parse_recent_messages, parse_channel_meta, fetch_photo_base64_with_proxies
-from app.utils import normalize_tg_s_url, parse_csv
-from app.settings_store import get_setting
-from app.dns_bridge import sync_from_dns_to_main_db, push_channels_to_domains, load_dns_domains
 from app.runtime_debug import record_event, setup_logging
-
+from app.scraper import (
+    fetch_html_with_proxies,
+    fetch_photo_base64_with_proxies,
+    parse_channel_meta,
+    parse_recent_messages,
+)
+from app.settings_store import get_setting
+from app.utils import normalize_tg_s_url, parse_csv
 
 logger = logging.getLogger("kabootar.sync")
 _SYNC_EXEC_LOCK = threading.Lock()
@@ -109,28 +111,6 @@ def _direct_media_batch_size() -> int:
     return _direct_batch_size("DIRECT_MEDIA_APPLY_BATCH_SIZE", 2, 1, 10)
 
 
-def parse_mapping(raw: str) -> dict[str, str]:
-    out = {}
-    for item in parse_csv(raw):
-        if ":" not in item:
-            continue
-        tg, rc = item.split(":", 1)
-        out[normalize_tg_s_url(tg)] = rc.strip()
-    return out
-
-
-def parse_media_mode_map(raw: str) -> dict[str, str]:
-    out = {}
-    for item in parse_csv(raw):
-        if ":" not in item:
-            continue
-        tg, mode = item.split(":", 1)
-        mode = mode.strip().lower()
-        if mode in {"caption_only", "all"}:
-            out[normalize_tg_s_url(tg)] = mode
-    return out
-
-
 def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: bool = False, priority_channel: str = "") -> dict:
     setup_logging()
     ensure_schema()
@@ -191,7 +171,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
         return result
 
     direct_channels_raw = get_setting("direct_channels", "") or ""
-    direct_proxies_raw = get_setting("direct_proxies", settings.telegram_proxies) or settings.telegram_proxies
+    direct_proxies_raw = get_setting("direct_proxies", "") or ""
     channels = [normalize_tg_s_url(c) for c in parse_csv(direct_channels_raw)]
     if priority_channel:
         try:
@@ -201,23 +181,13 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
         if wanted and wanted in channels:
             channels = [wanted, *[item for item in channels if item != wanted]]
     if not channels:
-        result = {"saved": 0, "sent": 0, "skipped": 0, "channels": 0}
+        result = {"saved": 0, "channels": 0}
         record_event("sync_finish", mode=source_mode, ok=True, elapsed_ms=int((time.time() - started) * 1000), result=result)
         _emit_progress(progress, kind="sync_finish", mode=source_mode, ok=True, result=result, elapsed_ms=int((time.time() - started) * 1000))
         return result
     proxies = parse_csv(direct_proxies_raw)
-    mapping = parse_mapping(settings.channels_mapping)
-    media_mode_map = parse_media_mode_map(__import__('os').getenv('CHANNELS_MEDIA_MODE', ''))
-    global_mode = (__import__('os').getenv('MEDIA_MODE', 'caption_only') or 'caption_only').strip().lower()
 
-    sent = 0
     saved = 0
-    skipped = 0
-
-    token = user_id = None
-    room_cache: dict[str, Optional[str]] = {}
-    if settings.rocket_url and settings.rocket_admin_user and settings.rocket_admin_pass:
-        token, user_id = rc_login(settings.rocket_url, settings.rocket_admin_user, settings.rocket_admin_pass)
 
     media_cache: dict[str, tuple[str, str]] = {}
     _emit_progress(progress, kind="sync_plan", mode=source_mode, channels_total=len(channels), domains_total=0)
@@ -294,7 +264,6 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                     ch.avatar_url = meta.get('avatar_url', '') or ch.avatar_url
                     db.flush()
 
-                mode = media_mode_map.get(url, global_mode)
                 channel_saved = 0
                 changed_message_ids: set[int] = set()
                 text_items = sorted(recent, key=lambda item: (_direct_text_weight(item), int(item.get('message_id') or 0)))
@@ -484,12 +453,6 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                     )
                     continue
 
-                changed_messages = db.scalars(
-                    select(Message).where(
-                        Message.channel_id == ch.id,
-                        Message.message_id.in_(sorted(changed_message_ids)),
-                    )
-                ).all()
                 saved += channel_saved
                 logger.info("sync channel saved url=%s saved=%s fetched=%s", url, channel_saved, len(recent))
                 _emit_progress(
@@ -505,26 +468,12 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                     channel_saved=channel_saved,
                 )
 
-                if token and user_id:
-                    room_name = mapping.get(url) or settings.rocket_room_name
-                    room_id = None
-                    if room_name:
-                        if room_name not in room_cache:
-                            room_cache[room_name] = room_id_by_name(settings.rocket_url, token, user_id, room_name)
-                        room_id = room_cache[room_name]
-                    if room_id:
-                        for msg in changed_messages:
-                            if mode == 'caption_only' and msg.has_media and not msg.text:
-                                skipped += 1
-                                continue
-                            post_message(settings.rocket_url, token, user_id, room_id, f"📡 {url} #{msg.message_id}\n{msg.text}")
-                            sent += 1
     except Exception as exc:
         logger.exception("sync failed mode=%s", source_mode)
         record_event("sync_finish", level="error", mode=source_mode, ok=False, elapsed_ms=int((time.time() - started) * 1000), error=str(exc))
         _emit_progress(progress, kind="sync_error", mode=source_mode, error=str(exc), elapsed_ms=int((time.time() - started) * 1000))
         raise
-    result = {"saved": saved, "sent": sent, "skipped": skipped, "channels": len(channels)}
+    result = {"saved": saved, "channels": len(channels)}
     record_event("sync_finish", mode=source_mode, ok=True, elapsed_ms=int((time.time() - started) * 1000), result=result)
     _emit_progress(progress, kind="sync_finish", mode=source_mode, ok=True, result=result, elapsed_ms=int((time.time() - started) * 1000))
     return result

@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kabootar Android Build</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #07131f;
+      --panel: #0d2234;
+      --line: #1c4669;
+      --text: #eef6ff;
+      --muted: #9ab5cc;
+      --accent: #7ad0ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      font-family: Segoe UI, Tahoma, sans-serif;
+      background:
+        radial-gradient(circle at top, rgba(122,208,255,.18), transparent 40%),
+        linear-gradient(180deg, #08121c, var(--bg));
+      color: var(--text);
+    }
+    .card {
+      width: min(720px, 100%);
+      padding: 28px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: linear-gradient(180deg, rgba(16,34,51,.96), rgba(9,21,33,.96));
+      box-shadow: 0 20px 60px rgba(0, 0, 0, .35);
+    }
+    h1 {
+      margin: 0 0 12px;
+      font-size: 28px;
+    }
+    p {
+      margin: 0 0 14px;
+      line-height: 1.7;
+      color: var(--muted);
+    }
+    code {
+      color: var(--accent);
+      font-family: Consolas, monospace;
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Kabootar Android build is ready</h1>
+    <p>This APK does not bundle the local backend yet.</p>
+    <p>If you want this build to open a live Kabootar web endpoint, set <code>ANDROID_START_URL</code> in GitHub Actions or pass <code>-PstartUrl=...</code> in the local Gradle build.</p>
+    <p>Until then, the app opens this local page instead of shipping a broken hardcoded external URL.</p>
+  </main>
+</body>
+</html>

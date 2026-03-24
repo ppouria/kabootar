@@ -14,6 +14,10 @@ if "%PYTHON_CMD%"=="" (
   echo ERROR: Python not found in PATH.
   exit /b 1
 )
+"%PYTHON_CMD%" -m pip install Pillow cairosvg
+if errorlevel 1 (
+  echo WARN: logo renderer dependencies failed. Using existing icon assets.
+)
 "%PYTHON_CMD%" build\assets\prepare_logo_assets.py
 if errorlevel 1 (
   echo WARN: logo asset preparation failed. Using existing icon assets.

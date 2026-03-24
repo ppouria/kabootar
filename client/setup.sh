@@ -6,5 +6,5 @@ source .venv/bin/activate
 pip install -U pip
 pip install -r requirements.txt
 export PYTHONPATH="$(pwd)"
-./.venv/bin/alembic upgrade head
+./.venv/bin/python manage.py migrate
 echo "Setup done. Run web: .venv/bin/python manage.py web"

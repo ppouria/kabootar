@@ -1,6 +1,6 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
 
 from dotenv import load_dotenv
 
@@ -11,7 +11,6 @@ load_dotenv(PROJECT_ROOT / ".env")
 @dataclass
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
-    telegram_proxies: str = os.getenv("TELEGRAM_PROXIES", "")
 
 
 settings = Settings()

@@ -9,6 +9,10 @@ from pathlib import Path
 
 from PIL import Image
 
+try:
+    from cairosvg import svg2png
+except Exception:
+    svg2png = None
 
 ROOT = Path(__file__).resolve().parents[3]
 SOURCE_SVG = Path(__file__).resolve().with_name("kabootar.svg")
@@ -56,6 +60,18 @@ def _save_web_svgs(svg_text: str) -> None:
     (FRONTEND_STATIC / "kabootar.svg").write_text(svg_text, encoding="utf-8")
     # Keep compatibility with existing fallback path used in old builds.
     (FRONTEND_STATIC / "t_logo.svg").write_text(svg_text, encoding="utf-8")
+
+
+def _render_svg(svg_text: str, size: int = 1024) -> Image.Image:
+    if svg2png is None:
+        raise RuntimeError("CairoSVG runtime is unavailable")
+    png_bytes = svg2png(
+        bytestring=svg_text.encode("utf-8"),
+        output_width=size,
+        output_height=size,
+        background_color=None,
+    )
+    return Image.open(BytesIO(png_bytes)).convert("RGBA")
 
 
 def _extract_embedded_png(svg_text: str) -> Image.Image:
@@ -154,7 +170,12 @@ def main() -> None:
     cleaned_svg = _clean_svg(raw_svg)
     _save_web_svgs(cleaned_svg)
 
-    raster = _extract_embedded_png(cleaned_svg)
+    raster_source = "svg-render"
+    try:
+        raster = _render_svg(cleaned_svg, size=1024)
+    except Exception as exc:
+        raster = _extract_embedded_png(cleaned_svg)
+        raster_source = f"embedded-png-fallback:{exc}"
     raster = _remove_edge_white_background(raster)
     master = _fit_square(raster, size=1024, inner_ratio=0.88)
 
@@ -168,6 +189,7 @@ def main() -> None:
     print(f"[brand] windows icon: {WINDOWS_ICON}")
     print(f"[brand] linux icon: {LINUX_ICON}")
     print(f"[brand] macos icon: {MACOS_ICON}")
+    print(f"[brand] raster source: {raster_source}")
     print("[brand] android icons: mipmap-*/ic_launcher(.png|_round.png)")
 
 

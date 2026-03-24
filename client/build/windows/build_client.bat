@@ -26,13 +26,13 @@ if errorlevel 1 (
 )
 "%PYTHON_CMD%" -m pip install pywebview pyinstaller
 if errorlevel 1 exit /b 1
-"%PYTHON_CMD%" -m pip install Pillow
+"%PYTHON_CMD%" -m pip install Pillow cairosvg
 if errorlevel 1 exit /b 1
 "%PYTHON_CMD%" build\assets\prepare_logo_assets.py
 if errorlevel 1 exit /b 1
-call npm --prefix frontend install
+call npm.cmd --prefix frontend install
 if errorlevel 1 exit /b 1
-call npm --prefix frontend run build
+call npm.cmd --prefix frontend run build
 if errorlevel 1 exit /b 1
 
 "%PYTHON_CMD%" -m PyInstaller ^

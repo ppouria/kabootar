@@ -1,16 +1,16 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
 import re
 import secrets
+import socket
 import subprocess
 import threading
 import time
 import zlib
-import base64
-import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -20,15 +20,18 @@ from dnslib import QTYPE, RCODE, RR, TXT
 from dnslib.server import BaseResolver, DNSServer
 from sqlalchemy import select
 
-from app.config import settings
 from app.db import SessionLocal, ensure_schema
 from app.models import Channel, Message
-from app.scraper import fetch_html_with_proxies, parse_channel_meta, parse_recent_messages, fetch_photo_base64_with_proxies
-from app.settings_store import get_setting, set_setting
-from app.utils import normalize_tg_s_url, parse_csv
-from app.text_packer import pack_text, unpack_text
 from app.runtime_debug import record_event, setup_logging
-
+from app.scraper import (
+    fetch_html_with_proxies,
+    fetch_photo_base64_with_proxies,
+    parse_channel_meta,
+    parse_recent_messages,
+)
+from app.settings_store import get_setting, set_setting
+from app.text_packer import pack_text, unpack_text
+from app.utils import normalize_tg_s_url, parse_csv
 
 logger = logging.getLogger("kabootar.dns")
 ProgressCallback = Optional[Callable[[dict], None]]
@@ -262,7 +265,7 @@ class BridgeCache:
     def refresh_from_telegram(self) -> None:
         channels_raw = get_setting("direct_channels", "") or ""
         channels = self.get_channels_override() or [normalize_tg_s_url(c) for c in parse_csv(channels_raw)]
-        proxies_raw = get_setting("direct_proxies", settings.telegram_proxies) or settings.telegram_proxies
+        proxies_raw = get_setting("direct_proxies", "") or ""
         proxies = parse_csv(proxies_raw)
         now = int(time.time())
         max_photo_bytes = int(__import__("os").getenv("DNS_MEDIA_MAX_BYTES", "180000"))

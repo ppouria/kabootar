@@ -4,8 +4,8 @@ Revision ID: 0003_message_reply_meta
 Revises: 0002_channel_meta
 Create Date: 2026-03-19
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "0003_message_reply_meta"
 down_revision = "0002_channel_meta"

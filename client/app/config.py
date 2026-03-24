@@ -1,6 +1,6 @@
+import os
 from dataclasses import dataclass
 from pathlib import Path
-import os
 
 from dotenv import load_dotenv
 
@@ -15,17 +15,6 @@ class Settings:
     app_secret_key: str = os.getenv("APP_SECRET_KEY", "change-me")
 
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/app.db")
-
-    channels_address: str = os.getenv("CHANNELS_ADDRESS", "")
-    telegram_proxies: str = os.getenv("TELEGRAM_PROXIES", "")
-
-    cron_interval_minutes: int = int(os.getenv("CRON_INTERVAL_MINUTES", "15"))
-
-    rocket_url: str = os.getenv("ROCKET_URL", "")
-    rocket_admin_user: str = os.getenv("ROCKET_ADMIN_USER", "")
-    rocket_admin_pass: str = os.getenv("ROCKET_ADMIN_PASS", "")
-    rocket_room_name: str = os.getenv("ROCKET_ROOM_NAME", "")
-    channels_mapping: str = os.getenv("CHANNELS_MAPPING", "")
 
 
 settings = Settings()

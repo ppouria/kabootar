@@ -15,7 +15,7 @@ DEFAULTS: dict[str, str] = {
     # Session TTL in seconds when password mode is enabled
     "dns_session_ttl_seconds": os.getenv("DNS_SESSION_TTL_SECONDS", "3600"),
     # Channels/proxies used by DNS bridge to fetch Telegram data.
-    "telegram_channels": os.getenv("TELEGRAM_CHANNELS", os.getenv("CHANNELS_ADDRESS", "")),
+    "telegram_channels": os.getenv("TELEGRAM_CHANNELS", ""),
     "telegram_proxies": os.getenv("TELEGRAM_PROXIES", ""),
     "dns_domain": os.getenv("DNS_DOMAIN", "t.example.com"),
     "dns_port": os.getenv("DNS_PORT", "5533"),

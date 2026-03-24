@@ -10,10 +10,9 @@ import time
 import zlib
 from dataclasses import dataclass
 
-from dnslib import DNSRecord, NS, QTYPE, RCODE, RR, SOA, TXT
+from dnslib import NS, QTYPE, RCODE, RR, SOA, TXT, DNSRecord
 from dnslib.server import BaseResolver, DNSServer
 
-from app.config import settings
 from app.scraper import (
     fetch_html_with_proxies,
     fetch_photo_base64_with_proxies,
@@ -223,7 +222,7 @@ class BridgeCache:
             if override:
                 channels = self._merged_channels(channels, override)
 
-        proxies_raw = get_setting("telegram_proxies", settings.telegram_proxies) or settings.telegram_proxies
+        proxies_raw = get_setting("telegram_proxies", "") or ""
         proxies = parse_csv(proxies_raw)
 
         now = int(time.time())

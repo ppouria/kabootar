@@ -1,0 +1,103 @@
+name: Python Quality
+
+on:
+  push:
+    paths:
+      - "client/**/*.py"
+      - "server/**/*.py"
+      - "client/alembic/**"
+      - "client/alembic.ini"
+      - "server/alembic/**"
+      - "server/alembic.ini"
+      - "client/requirements.txt"
+      - "server/requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/python-quality.yml"
+  pull_request:
+    paths:
+      - "client/**/*.py"
+      - "server/**/*.py"
+      - "client/alembic/**"
+      - "client/alembic.ini"
+      - "server/alembic/**"
+      - "server/alembic.ini"
+      - "client/requirements.txt"
+      - "server/requirements.txt"
+      - "pyproject.toml"
+      - ".github/workflows/python-quality.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ruff:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Ruff
+        uses: astral-sh/ruff-action@v3
+
+      - name: Run Ruff
+        run: ruff check client server
+
+  client-migrations:
+    name: Client Migrations
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: client
+    env:
+      DATABASE_URL: sqlite:///${{ runner.temp }}/client-ci.db
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Client Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Apply Client Migrations
+        run: python manage.py migrate
+
+      - name: Check Client Migration Drift
+        run: python manage.py check-migrations
+
+  server-migrations:
+    name: Server Migrations
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: server
+    env:
+      DATABASE_URL: sqlite:///${{ runner.temp }}/server-ci.db
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install Server Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Apply Server Migrations
+        run: python manage.py migrate
+
+      - name: Check Server Migration Drift
+        run: python manage.py check-migrations

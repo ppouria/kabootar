@@ -5,7 +5,8 @@ plugins {
 
 val startUrlProp = (project.findProperty("startUrl") as String?)?.trim()
 val startUrlEnv = System.getenv("START_URL")?.trim()
-val startUrlRaw = (startUrlProp ?: startUrlEnv ?: "https://example.com").ifBlank { "https://example.com" }
+val startUrlDefault = "file:///android_asset/bootstrap.html"
+val startUrlRaw = (startUrlProp ?: startUrlEnv ?: startUrlDefault).ifBlank { startUrlDefault }
 val startUrlEscaped = startUrlRaw.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {

@@ -17,7 +17,7 @@ if ! python3 -m pip install -r requirements.txt; then
     dnslib==0.9.25 \
     dnspython==2.6.1
 fi
-python3 -m pip install pywebview pyinstaller Pillow
+python3 -m pip install pywebview pyinstaller Pillow cairosvg
 
 python3 build/assets/prepare_logo_assets.py
 
