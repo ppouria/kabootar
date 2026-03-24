@@ -28,6 +28,9 @@ android {
         }
         release {
             isMinifyEnabled = true
+            // CI does not ship a private keystore yet. Use the debug signing
+            // config so the generated universal APK is still installable.
+            signingConfig = signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

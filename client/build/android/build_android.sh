@@ -34,11 +34,14 @@ else
   GRADLE_CMD="${GRADLE_BIN}"
 fi
 
-"${GRADLE_CMD}" :app:assembleDebug :app:assembleRelease -PstartUrl="${START_URL}"
+"${GRADLE_CMD}" :app:clean :app:assembleDebug :app:assembleRelease -PstartUrl="${START_URL}"
 
-if [[ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]]; then
-  cp -f "app/build/outputs/apk/release/app-release-unsigned.apk" "app/build/outputs/apk/release/kabootar-client-android-universal.apk"
+UNIVERSAL_SOURCE="app/build/outputs/apk/release/app-release.apk"
+if [[ ! -f "${UNIVERSAL_SOURCE}" ]]; then
+  echo "ERROR: signed release APK not found: ${UNIVERSAL_SOURCE}" >&2
+  exit 1
 fi
+cp -f "${UNIVERSAL_SOURCE}" "app/build/outputs/apk/release/kabootar-client-android-universal.apk"
 
 echo "Debug APK: app/build/outputs/apk/debug/app-debug.apk"
 echo "Universal APK: app/build/outputs/apk/release/kabootar-client-android-universal.apk"

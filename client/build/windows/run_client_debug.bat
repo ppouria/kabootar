@@ -20,7 +20,7 @@ if errorlevel 1 exit /b 1
 py -m pip install -r requirements.txt
 if errorlevel 1 exit /b 1
 
-call npm --prefix frontend install
+call npm --prefix frontend ci
 if errorlevel 1 exit /b 1
 
 call npm --prefix frontend run build

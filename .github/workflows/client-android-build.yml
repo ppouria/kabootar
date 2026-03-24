@@ -67,12 +67,17 @@ jobs:
         env:
           ANDROID_START_URL: ${{ github.event.inputs.start_url || vars.ANDROID_START_URL || 'file:///android_asset/bootstrap.html' }}
         run: |
-          gradle -p client/android :app:assembleDebug :app:assembleRelease \
+          gradle -p client/android :app:clean :app:assembleDebug :app:assembleRelease \
             -PstartUrl="${ANDROID_START_URL}"
 
       - name: Prepare Universal APK
         run: |
-          cp client/android/app/build/outputs/apk/release/app-release-unsigned.apk client/android/app/build/outputs/apk/release/kabootar-client-android-universal.apk
+          APK_SOURCE="client/android/app/build/outputs/apk/release/app-release.apk"
+          if [ ! -f "${APK_SOURCE}" ]; then
+            echo "signed release APK not found at ${APK_SOURCE}" >&2
+            exit 1
+          fi
+          cp "${APK_SOURCE}" client/android/app/build/outputs/apk/release/kabootar-client-android-universal.apk
 
       - name: Upload Universal APK
         uses: actions/upload-artifact@v4

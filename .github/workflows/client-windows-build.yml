@@ -44,6 +44,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: client/frontend/package-lock.json
 
       - name: Prepare Kabootar Logo Assets
         run: |
@@ -63,11 +65,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Frontend
+        shell: cmd
         run: |
-          npm.cmd --prefix frontend install
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm.cmd --prefix frontend run build
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pushd frontend
+          npm ci
+          if errorlevel 1 exit /b 1
+          npm run build
+          if errorlevel 1 exit /b 1
+          popd
 
       - name: Build Desktop EXE (AMD64)
         run: |
@@ -126,6 +131,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+          cache: "npm"
+          cache-dependency-path: client/frontend/package-lock.json
 
       - name: Prepare Kabootar Logo Assets
         run: |
@@ -145,11 +152,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Frontend
+        shell: cmd
         run: |
-          npm.cmd --prefix frontend install
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          npm.cmd --prefix frontend run build
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pushd frontend
+          npm ci
+          if errorlevel 1 exit /b 1
+          npm run build
+          if errorlevel 1 exit /b 1
+          popd
 
       - name: Build Desktop EXE (ARM64)
         run: |

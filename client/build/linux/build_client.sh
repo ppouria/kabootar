@@ -21,7 +21,7 @@ python3 -m pip install pywebview pyinstaller Pillow cairosvg
 
 python3 build/assets/prepare_logo_assets.py
 
-npm --prefix frontend install
+npm --prefix frontend ci
 npm --prefix frontend run build
 
 python3 -m PyInstaller \

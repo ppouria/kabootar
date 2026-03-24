@@ -30,7 +30,7 @@ if errorlevel 1 exit /b 1
 if errorlevel 1 exit /b 1
 "%PYTHON_CMD%" build\assets\prepare_logo_assets.py
 if errorlevel 1 exit /b 1
-call npm.cmd --prefix frontend install
+call npm.cmd --prefix frontend ci
 if errorlevel 1 exit /b 1
 call npm.cmd --prefix frontend run build
 if errorlevel 1 exit /b 1

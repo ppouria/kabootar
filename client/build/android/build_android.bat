@@ -57,12 +57,15 @@ if errorlevel 1 (
   set "RUN_GRADLE=gradle"
 )
 
-call "%RUN_GRADLE%" :app:assembleDebug :app:assembleRelease -PstartUrl="%START_URL%"
+call "%RUN_GRADLE%" :app:clean :app:assembleDebug :app:assembleRelease -PstartUrl="%START_URL%"
 if errorlevel 1 exit /b 1
 
-if exist "app\build\outputs\apk\release\app-release-unsigned.apk" (
-  copy /Y "app\build\outputs\apk\release\app-release-unsigned.apk" "app\build\outputs\apk\release\kabootar-client-android-universal.apk" >nul
+set "UNIVERSAL_SOURCE=app\build\outputs\apk\release\app-release.apk"
+if not exist "%UNIVERSAL_SOURCE%" (
+  echo ERROR: signed release APK not found: %UNIVERSAL_SOURCE%
+  exit /b 1
 )
+copy /Y "%UNIVERSAL_SOURCE%" "app\build\outputs\apk\release\kabootar-client-android-universal.apk" >nul
 
 echo.
 echo Debug APK: app\build\outputs\apk\debug\app-debug.apk
