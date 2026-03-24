@@ -351,10 +351,10 @@ def _run_sync_job(job_id: str, priority_channel: str = "") -> None:
 
 
 def _normalize_source_mode(raw: str | None) -> str:
-    mode = (raw or "direct").strip().lower()
+    mode = (raw or "dns").strip().lower()
     if mode == "telegram":
         mode = "direct"
-    return mode if mode in {"direct", "dns"} else "direct"
+    return mode if mode in {"direct", "dns"} else "dns"
 
 
 def _normalize_channel_list(raw: str | None) -> list[str]:
@@ -514,6 +514,16 @@ def _normalize_dns_domain_line(raw: str) -> str:
     if not domain_norm:
         return ""
     return f"{domain_norm}|{password_part}" if password_part else domain_norm
+
+
+def _load_dns_domain_lines(raw: str | None = None) -> list[str]:
+    source = raw if raw is not None else get_setting("dns_domains", "") or ""
+    lines: list[str] = []
+    for item in source.splitlines():
+        normalized = _normalize_dns_domain_line(item)
+        if normalized and normalized not in lines:
+            lines.append(normalized)
+    return lines
 
 
 def _load_domain_health_map() -> dict[str, dict]:
@@ -771,9 +781,12 @@ def create_app() -> Flask:
         channels = _normalize_channel_list(request.form.get('channel') or '')
         domain = (request.form.get('domain') or '').strip().rstrip('.').lower()
         password = (request.form.get('password') or '').strip()
-        mode = _normalize_source_mode(get_setting("source_mode", "direct"))
+        mode = _normalize_source_mode(get_setting("source_mode", "dns"))
         if not channels:
             return redirect(url_for('index', msg="invalid_input"))
+        dns_domain_lines = _load_dns_domain_lines()
+        if mode == "dns" and not dns_domain_lines:
+            return redirect(url_for('index'))
 
         if channels:
             current_direct = _normalize_channel_list(
@@ -806,12 +819,7 @@ def create_app() -> Flask:
         # Backward compatibility: if old UI posts domain/password in add-channel modal,
         # keep that domain in dns_domains.
         if domain:
-            current_domains = (get_setting("dns_domains", "") or "").strip()
-            lines: list[str] = []
-            for raw in current_domains.splitlines():
-                normalized = _normalize_dns_domain_line(raw)
-                if normalized and normalized not in lines:
-                    lines.append(normalized)
+            lines = _load_dns_domain_lines()
             entry = _normalize_dns_domain_line(f"{domain}|{password}" if password else domain)
             if entry:
                 existing_domains = [x.split("|", 1)[0].strip().lower() for x in lines]
@@ -846,11 +854,29 @@ def create_app() -> Flask:
             return redirect(url_for('index', channel=channels[0], msg=base_msg))
         return redirect(url_for('index', msg=base_msg))
 
+    @app.post("/domain/add")
+    def add_domain():
+        domain = (request.form.get("domain") or "").strip().rstrip(".").lower()
+        password = (request.form.get("password") or "").strip()
+        entry = _normalize_dns_domain_line(f"{domain}|{password}" if password else domain)
+        if not entry:
+            return redirect(url_for("index"))
+
+        lines = _load_dns_domain_lines()
+        domain_key = entry.split("|", 1)[0].strip().lower()
+        lines = [line for line in lines if line.split("|", 1)[0].strip().lower() != domain_key]
+        lines.append(entry)
+        set_setting("dns_domains", "\n".join(lines))
+        return redirect(url_for("index"))
+
     @app.get("/")
     def index():
         selected = request.args.get("channel")
         ui_msg = request.args.get("msg", "")
-        configured_channels = _normalize_channel_list(get_setting("direct_channels", "") or "")
+        app_settings = all_settings()
+        source_mode = _normalize_source_mode(app_settings.get("source_mode"))
+        dns_domain_lines = _load_dns_domain_lines(app_settings.get("dns_domains"))
+        configured_channels = _normalize_channel_list(app_settings.get("direct_channels", "") or "")
         configured_set = set(configured_channels)
         configured_order = {url: i for i, url in enumerate(configured_channels)}
 
@@ -917,7 +943,9 @@ def create_app() -> Flask:
             selected_channel=selected_channel,
             messages=msgs,
             latest_by_channel=latest_by_channel,
-            app_settings=all_settings(),
+            app_settings=app_settings,
+            source_mode=source_mode,
+            dns_domains_count=len(dns_domain_lines),
             ui_msg=ui_msg,
         )
 

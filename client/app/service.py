@@ -115,7 +115,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
     setup_logging()
     ensure_schema()
     started = time.time()
-    source_mode = (get_setting("source_mode", "direct") or "direct").strip().lower()
+    source_mode = (get_setting("source_mode", "dns") or "dns").strip().lower()
     if source_mode == "telegram":
         source_mode = "direct"
     record_event("sync_start", mode=source_mode)

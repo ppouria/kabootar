@@ -26,7 +26,7 @@ def _loop() -> None:
     record_event("background_sync_loop_started", interval_minutes=_interval_minutes())
     while True:
         started = time.time()
-        source_mode = (get_setting("source_mode", "direct") or "direct").strip().lower()
+        source_mode = (get_setting("source_mode", "dns") or "dns").strip().lower()
         force_server_refresh = source_mode == "dns"
         try:
             record_event(

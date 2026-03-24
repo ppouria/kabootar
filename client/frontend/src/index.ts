@@ -26,11 +26,16 @@ class MirrorApp {
   private selected: string;
   private readonly STORAGE_KEY = 'kabootar_read_v1';
   private readonly LANG_KEY = 'kabootar_lang';
+  private readonly sourceMode: 'dns' | 'direct';
+  private readonly dnsDomainsCount: number;
   private lang: 'fa' | 'en' = 'fa';
   private i18n: Record<string, string> = {};
 
   constructor() {
-    this.selected = (document.getElementById('chat') as HTMLElement | null)?.dataset.selected || '';
+    const chat = document.getElementById('chat') as HTMLElement | null;
+    this.selected = chat?.dataset.selected || '';
+    this.sourceMode = (chat?.dataset.sourceMode || 'dns').toLowerCase() === 'direct' ? 'direct' : 'dns';
+    this.dnsDomainsCount = Math.max(0, Number(chat?.dataset.dnsDomainsCount || '0') || 0);
   }
 
   private t(key: string, fallback = ''): string {
@@ -58,6 +63,10 @@ class MirrorApp {
       .trim();
     const glyphs = Array.from(clean.replace(/\s+/g, ''));
     return (glyphs.slice(0, 2).join('') || '?').toUpperCase();
+  }
+
+  private requiresDomainBeforeChannel(): boolean {
+    return this.sourceMode === 'dns' && this.dnsDomainsCount < 1;
   }
 
   private async loadLang(lang: 'fa' | 'en'): Promise<Record<string, string>> {
@@ -266,6 +275,7 @@ class MirrorApp {
 
     const open = (ev: Event) => {
       ev.preventDefault();
+      if (this.requiresDomainBeforeChannel()) return;
       if (loadingHint) loadingHint.hidden = true;
       if (errorHint) errorHint.hidden = true;
       modal.hidden = false;
@@ -371,6 +381,13 @@ class MirrorApp {
         }
         return;
       }
+      if (this.requiresDomainBeforeChannel()) {
+        if (errorHint) {
+          errorHint.textContent = this.t('index.add_domain_first', 'Add a domain first to use DNS mode.');
+          errorHint.hidden = false;
+        }
+        return;
+      }
 
       if (channels.length) addPendingChannels(channels);
       setSubmitting(true);
@@ -393,12 +410,87 @@ class MirrorApp {
         setSubmitting(false);
       }
     });
+  }
 
-    if (!document.querySelector('.channel')) {
-      setTimeout(() => {
-        modal.hidden = false;
-      }, 250);
-    }
+  private setupAddDomainBox(): void {
+    const btnBottom = document.getElementById('addDomainBtnBottom');
+    const btnMain = document.getElementById('addDomainBtnMain');
+    const modal = document.getElementById('addDomainModal') as HTMLElement | null;
+    const form = document.getElementById('addDomainModalForm') as HTMLFormElement | null;
+    const cancel = document.getElementById('addDomainModalCancel') as HTMLButtonElement | null;
+    const submit = document.getElementById('addDomainModalSubmit') as HTMLButtonElement | null;
+    const errorHint = form?.querySelector('.add-form-error') as HTMLElement | null;
+    const loadingHint = form?.querySelector('.add-form-loading') as HTMLElement | null;
+    if (!modal || !form) return;
+
+    const open = (ev: Event) => {
+      ev.preventDefault();
+      if (loadingHint) loadingHint.hidden = true;
+      if (errorHint) errorHint.hidden = true;
+      modal.hidden = false;
+      const field = form.querySelector<HTMLInputElement>('input[name="domain"]');
+      setTimeout(() => field?.focus(), 20);
+    };
+
+    const close = () => {
+      modal.hidden = true;
+    };
+
+    btnBottom?.addEventListener('click', open);
+    btnMain?.addEventListener('click', open);
+    cancel?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      close();
+    });
+
+    modal.addEventListener('click', (ev) => {
+      if (ev.target === modal) close();
+    });
+
+    const setSubmitting = (on: boolean) => {
+      form.querySelectorAll<HTMLInputElement | HTMLButtonElement>('input,button').forEach((el) => {
+        if (el === cancel) {
+          el.disabled = on;
+          return;
+        }
+        el.disabled = on;
+      });
+      if (loadingHint) loadingHint.hidden = !on;
+      if (submit) submit.textContent = this.t(on ? 'index.adding' : 'common.add', on ? 'Adding...' : 'Add');
+    };
+
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const domain = (form.querySelector('input[name="domain"]') as HTMLInputElement | null)?.value?.trim() || '';
+      if (errorHint) errorHint.hidden = true;
+      if (!domain) {
+        if (errorHint) {
+          errorHint.textContent = this.t('index.domain_required', 'Domain is required.');
+          errorHint.hidden = false;
+        }
+        return;
+      }
+
+      setSubmitting(true);
+      try {
+        const response = await fetch(form.action, {
+          method: 'POST',
+          body: new FormData(form),
+          redirect: 'follow',
+        });
+        if (response.redirected && response.url) {
+          window.location.href = response.url;
+          return;
+        }
+        window.location.reload();
+      } catch {
+        if (errorHint) {
+          errorHint.textContent = this.t('index.request_failed', 'Request failed. Check your connection and try again.');
+          errorHint.hidden = false;
+        }
+        setSubmitting(false);
+      }
+    });
   }
 
   private formatDuration(seconds?: number | null): string {
@@ -736,6 +828,7 @@ class MirrorApp {
     this.applyUnreadBadges(readMap);
     const divider = this.addUnreadDivider(readMap);
     this.setupMobileMenu();
+    this.setupAddDomainBox();
     this.setupAddChannelBox();
     this.setupSyncDialog();
     this.setupImageViewer();

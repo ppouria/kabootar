@@ -103,6 +103,7 @@ jobs:
           cp "${ARMV7_SOURCE}" "${RELEASE_DIR}/kabootar-client-android-armeabi-v7a.apk"
 
       - name: Upload Android APKs
+        if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
           name: kabootar-client-android-apks
@@ -116,6 +117,7 @@ jobs:
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
+          overwrite_files: true
           files: |
             client/android/app/build/outputs/apk/release/kabootar-client-android-universal.apk
             client/android/app/build/outputs/apk/release/kabootar-client-android-arm64-v8a.apk

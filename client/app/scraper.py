@@ -27,6 +27,46 @@ def _extract_style_url(style: str) -> str:
     return out
 
 
+def _extract_element_html(html: str, class_token: str, tags: tuple[str, ...] = ("div",)) -> str:
+    match = None
+    match_tag = ""
+    for tag in tags:
+        found = re.search(
+            rf"<{tag}\b[^>]*class=\"[^\"]*{re.escape(class_token)}[^\"]*\"[^>]*>",
+            html,
+            flags=re.I | re.S,
+        )
+        if found and (match is None or found.start() < match.start()):
+            match = found
+            match_tag = tag
+    if not match or not match_tag:
+        return ""
+
+    token_re = re.compile(rf"<{match_tag}\b[^>]*>|</{match_tag}>", flags=re.I | re.S)
+    depth = 0
+    end = match.end()
+    for token in token_re.finditer(html, match.start()):
+        text = token.group(0).lower()
+        if text.startswith(f"<{match_tag}") and not text.startswith(f"</{match_tag}>"):
+            depth += 1
+        else:
+            depth -= 1
+            if depth == 0:
+                end = token.end()
+                break
+    return html[match.start():end]
+
+
+def _inner_html(element_html: str) -> str:
+    if not element_html:
+        return ""
+    start = element_html.find(">")
+    end = element_html.rfind("</")
+    if start == -1 or end == -1 or end <= start:
+        return ""
+    return element_html[start + 1 : end]
+
+
 def parse_channel_meta(html: str) -> dict:
     title = ""
     avatar_url = ""
@@ -70,8 +110,8 @@ def _parse_message_block(block: str) -> Optional[dict]:
     date_match = re.search(r'datetime="([^"]+)"', block)
     dt = date_match.group(1) if date_match else ""
 
-    text_match = re.search(r'<div class="tgme_widget_message_text[^>]*>(.*?)</div>', block, flags=re.S)
-    text = strip_tags(text_match.group(1)) if text_match else ""
+    text_html = _extract_element_html(block, "js-message_text", tags=("div",))
+    text_inner = _inner_html(text_html)
     has_media = bool(re.search(r'tgme_widget_message_(photo|video|document|voice|audio)', block))
     photo_url = ""
     photo_style_match = re.search(r'tgme_widget_message_photo_wrap[^>]*style="([^"]+)"', block, flags=re.S)
@@ -81,32 +121,28 @@ def _parse_message_block(block: str) -> Optional[dict]:
     reply_to_message_id: int | None = None
     reply_author = ""
     reply_text = ""
-    reply_tag_match = re.search(
-        r'<(?:a|div)[^>]*class="[^"]*tgme_widget_message_reply[^"]*"[^>]*>',
-        block,
-        flags=re.S,
-    )
-    if reply_tag_match:
-        reply_tag = reply_tag_match.group(0)
+    reply_html = _extract_element_html(block, "tgme_widget_message_reply", tags=("a", "div"))
+    if reply_html:
+        reply_tag = reply_html.split(">", 1)[0]
         href_match = re.search(r'href="([^"]+)"', reply_tag)
         if href_match:
             mid_match = re.search(r"/(\d+)(?:\?|$)", href_match.group(1))
             if mid_match:
                 reply_to_message_id = int(mid_match.group(1))
-        author_match = re.search(
-            r'<div class="tgme_widget_message_reply_author[^>]*>(.*?)</div>',
-            block,
-            flags=re.S,
-        )
-        if author_match:
-            reply_author = strip_tags(author_match.group(1))
-        text_reply_match = re.search(
-            r'<div class="tgme_widget_message_reply_text[^>]*>(.*?)</div>',
-            block,
-            flags=re.S,
-        )
-        if text_reply_match:
-            reply_text = strip_tags(text_reply_match.group(1))
+        author_html = _extract_element_html(reply_html, "tgme_widget_message_author_name", tags=("span", "div"))
+        if not author_html:
+            author_html = _extract_element_html(reply_html, "tgme_widget_message_reply_author", tags=("div", "span"))
+        if author_html:
+            reply_author = strip_tags(_inner_html(author_html))
+        text_reply_html = _extract_element_html(reply_html, "js-message_reply_text", tags=("div", "span"))
+        if not text_reply_html:
+            text_reply_html = _extract_element_html(reply_html, "tgme_widget_message_reply_text", tags=("div", "span"))
+        if text_reply_html:
+            reply_text = strip_tags(_inner_html(text_reply_html))
+        if text_inner:
+            text_inner = text_inner.replace(reply_html, "", 1)
+
+    text = strip_tags(text_inner) if text_inner else ""
 
     return {
         "message_id": msg_id,

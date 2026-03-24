@@ -1,13 +1,14 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
 
-val versionProps = java.util.Properties().apply {
-    val versionFile = rootDir.parentFile.parentFile.resolve("version.properties")
-    if (versionFile.isFile) {
-        versionFile.inputStream().use { load(it) }
-    }
+val versionProps = Properties()
+val versionFile = rootDir.parentFile.parentFile.resolve("version.properties")
+if (versionFile.isFile) {
+    versionFile.inputStream().use { input -> versionProps.load(input) }
 }
 
 val appVersionName = (versionProps.getProperty("version_name") ?: "0.1.1").trim().ifBlank { "0.1.1" }

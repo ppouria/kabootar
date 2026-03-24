@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="index.page_title">Kabootar</title>
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
-  <link rel="stylesheet" href="/static/style.css?v=20260323a" />
+  <link rel="stylesheet" href="/static/style.css?v=20260324b" />
 </head>
 <body>
   <div class="layout">
@@ -23,10 +23,30 @@
         </div>
       </div>
       <div class="sidebar-add-box">
-        <button type="button" class="lite-btn add-channel-btn" id="addChannelBtnBottom" data-i18n="index.add_channel">+ Add Channel</button>
+        <div class="sidebar-add-actions">
+          {% if source_mode == 'dns' %}
+          <button type="button" class="lite-btn add-domain-btn" id="addDomainBtnBottom" data-i18n="index.add_domain">+ Add Domain</button>
+          {% endif %}
+          <button
+            type="button"
+            class="lite-btn add-channel-btn"
+            id="addChannelBtnBottom"
+            data-i18n="index.add_channel"
+            {% if source_mode == 'dns' and dns_domains_count == 0 %}disabled{% endif %}
+          >+ Add Channel</button>
+        </div>
+        {% if source_mode == 'dns' and dns_domains_count == 0 %}
+        <div class="sidebar-add-hint" data-i18n="index.add_domain_first">Add a domain first to use DNS mode.</div>
+        {% endif %}
       </div>
       {% if not channels %}
-      <div class="sidebar-empty" data-i18n="index.no_channels">No channels yet. Add your first channel.</div>
+      <div class="sidebar-empty" data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_desc_domain_first{% else %}index.no_channels{% endif %}">
+        {% if source_mode == 'dns' and dns_domains_count == 0 %}
+        In DNS mode, add a domain first and then add channels.
+        {% else %}
+        No channels yet. Add your first channel.
+        {% endif %}
+      </div>
       {% endif %}
       {% for ch in channels %}
       {% set latest_id = latest_by_channel.get(ch.id, 0) %}
@@ -52,7 +72,13 @@
 
     <div class="sidebar-overlay" id="sidebarOverlay" hidden></div>
 
-    <main class="chat" id="chat" data-selected="{{ selected or '' }}">
+    <main
+      class="chat"
+      id="chat"
+      data-selected="{{ selected or '' }}"
+      data-source-mode="{{ source_mode }}"
+      data-dns-domains-count="{{ dns_domains_count }}"
+    >
       <div class="chat-header">
         <button class="mobile-menu-btn" id="menuBtn" data-i18n-title="index.open_channels" aria-label="Open channels">☰</button>
         {% if selected_channel %}
@@ -79,9 +105,32 @@
       <div class="messages" id="messages">
         {% if not channels %}
         <div class="empty-state">
-          <h3 data-i18n="index.empty_title">Start by adding a channel</h3>
-          <p data-i18n="index.empty_desc">Paste @username or https://t.me/username.</p>
-          <button type="button" class="lite-btn add-channel-btn" id="addChannelBtnMain" data-i18n="index.add_channel">+ Add Channel</button>
+          <h3 data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_title_domain_first{% else %}index.empty_title{% endif %}">
+            {% if source_mode == 'dns' and dns_domains_count == 0 %}
+            Start by adding a domain
+            {% else %}
+            Start by adding a channel
+            {% endif %}
+          </h3>
+          <p data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_desc_domain_first{% else %}index.empty_desc{% endif %}">
+            {% if source_mode == 'dns' and dns_domains_count == 0 %}
+            In DNS mode, add a domain first and then add channels.
+            {% else %}
+            Paste @username or https://t.me/username.
+            {% endif %}
+          </p>
+          <div class="empty-actions">
+            {% if source_mode == 'dns' %}
+            <button type="button" class="lite-btn add-domain-btn" id="addDomainBtnMain" data-i18n="index.add_domain">+ Add Domain</button>
+            {% endif %}
+            <button
+              type="button"
+              class="lite-btn add-channel-btn"
+              id="addChannelBtnMain"
+              data-i18n="index.add_channel"
+              {% if source_mode == 'dns' and dns_domains_count == 0 %}disabled{% endif %}
+            >+ Add Channel</button>
+          </div>
         </div>
         {% endif %}
         {% for m in messages %}
@@ -144,6 +193,39 @@
         <div class="modal-actions">
           <button type="button" class="lite-btn" id="addModalCancel" data-i18n="common.cancel">Cancel</button>
           <button type="submit" class="lite-btn" id="addModalSubmit" data-i18n="common.add">Add</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal" id="addDomainModal" hidden>
+    <div class="modal-card classic">
+      <div class="modal-title" data-i18n="index.add_domain_modal_title">Add Domain</div>
+      <form id="addDomainModalForm" method="post" action="/domain/add">
+        <input
+          class="add-input"
+          type="text"
+          name="domain"
+          data-i18n-placeholder="settings.placeholder.domain"
+          placeholder="domain"
+          autocomplete="off"
+        />
+        <input
+          class="add-input"
+          type="password"
+          name="password"
+          data-i18n-placeholder="index.password_placeholder"
+          placeholder="password (optional)"
+          autocomplete="off"
+        />
+        <div class="add-form-error" hidden data-i18n="index.domain_required">Domain is required.</div>
+        <div class="add-form-loading" hidden>
+          <span class="spinner"></span>
+          <span data-i18n="index.request_in_progress">Request in progress...</span>
+        </div>
+        <div class="modal-actions">
+          <button type="button" class="lite-btn" id="addDomainModalCancel" data-i18n="common.cancel">Cancel</button>
+          <button type="submit" class="lite-btn" id="addDomainModalSubmit" data-i18n="common.add">Add</button>
         </div>
       </form>
     </div>
@@ -219,6 +301,6 @@
     </div>
   </div>
 
-  <script type="module" src="/static/index.js?v=20260323a"></script>
+  <script type="module" src="/static/index.js?v=20260324a"></script>
 </body>
 </html>

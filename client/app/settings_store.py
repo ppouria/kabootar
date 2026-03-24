@@ -9,7 +9,7 @@ from sqlalchemy import text
 from app.db import engine
 
 DEFAULTS: dict[str, str] = {
-    "source_mode": "direct",  # direct | dns
+    "source_mode": "dns",  # direct | dns
     "direct_channels": "",
     "direct_proxies": "",
     # DNS transport client config
@@ -49,6 +49,14 @@ def ensure_table() -> None:
                 text("INSERT OR IGNORE INTO app_settings(key,value) VALUES (:k,:v)"),
                 {"k": k, "v": v},
             )
+        source_mode = (conn.execute(text("SELECT value FROM app_settings WHERE key='source_mode'")).scalar() or "").strip().lower()
+        if source_mode == "direct":
+            direct_channels = (conn.execute(text("SELECT value FROM app_settings WHERE key='direct_channels'")).scalar() or "").strip()
+            direct_proxies = (conn.execute(text("SELECT value FROM app_settings WHERE key='direct_proxies'")).scalar() or "").strip()
+            dns_domains = (conn.execute(text("SELECT value FROM app_settings WHERE key='dns_domains'")).scalar() or "").strip()
+            dns_resolvers = (conn.execute(text("SELECT value FROM app_settings WHERE key='dns_resolvers'")).scalar() or "").strip()
+            if not direct_channels and not direct_proxies and (dns_domains or dns_resolvers):
+                conn.execute(text("UPDATE app_settings SET value='dns' WHERE key='source_mode'"))
 
 
 def get_setting(key: str, default: str | None = None) -> str | None:

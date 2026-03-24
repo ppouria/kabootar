@@ -4,7 +4,10 @@ class MirrorApp {
         this.LANG_KEY = 'kabootar_lang';
         this.lang = 'fa';
         this.i18n = {};
-        this.selected = document.getElementById('chat')?.dataset.selected || '';
+        const chat = document.getElementById('chat');
+        this.selected = chat?.dataset.selected || '';
+        this.sourceMode = (chat?.dataset.sourceMode || 'dns').toLowerCase() === 'direct' ? 'direct' : 'dns';
+        this.dnsDomainsCount = Math.max(0, Number(chat?.dataset.dnsDomainsCount || '0') || 0);
     }
     t(key, fallback = '') {
         return this.i18n[key] || fallback || key;
@@ -28,6 +31,9 @@ class MirrorApp {
             .trim();
         const glyphs = Array.from(clean.replace(/\s+/g, ''));
         return (glyphs.slice(0, 2).join('') || '?').toUpperCase();
+    }
+    requiresDomainBeforeChannel() {
+        return this.sourceMode === 'dns' && this.dnsDomainsCount < 1;
     }
     async loadLang(lang) {
         const resp = await fetch(`/static/i18n/${lang}.json`, { cache: 'no-cache' });
@@ -224,6 +230,8 @@ class MirrorApp {
             return;
         const open = (ev) => {
             ev.preventDefault();
+            if (this.requiresDomainBeforeChannel())
+                return;
             if (loadingHint)
                 loadingHint.hidden = true;
             if (errorHint)
@@ -333,6 +341,13 @@ class MirrorApp {
                 }
                 return;
             }
+            if (this.requiresDomainBeforeChannel()) {
+                if (errorHint) {
+                    errorHint.textContent = this.t('index.add_domain_first', 'Add a domain first to use DNS mode.');
+                    errorHint.hidden = false;
+                }
+                return;
+            }
             if (channels.length)
                 addPendingChannels(channels);
             setSubmitting(true);
@@ -356,11 +371,87 @@ class MirrorApp {
                 setSubmitting(false);
             }
         });
-        if (!document.querySelector('.channel')) {
-            setTimeout(() => {
-                modal.hidden = false;
-            }, 250);
-        }
+    }
+    setupAddDomainBox() {
+        const btnBottom = document.getElementById('addDomainBtnBottom');
+        const btnMain = document.getElementById('addDomainBtnMain');
+        const modal = document.getElementById('addDomainModal');
+        const form = document.getElementById('addDomainModalForm');
+        const cancel = document.getElementById('addDomainModalCancel');
+        const submit = document.getElementById('addDomainModalSubmit');
+        const errorHint = form?.querySelector('.add-form-error');
+        const loadingHint = form?.querySelector('.add-form-loading');
+        if (!modal || !form)
+            return;
+        const open = (ev) => {
+            ev.preventDefault();
+            if (loadingHint)
+                loadingHint.hidden = true;
+            if (errorHint)
+                errorHint.hidden = true;
+            modal.hidden = false;
+            const field = form.querySelector('input[name="domain"]');
+            setTimeout(() => field?.focus(), 20);
+        };
+        const close = () => {
+            modal.hidden = true;
+        };
+        btnBottom?.addEventListener('click', open);
+        btnMain?.addEventListener('click', open);
+        cancel?.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            close();
+        });
+        modal.addEventListener('click', (ev) => {
+            if (ev.target === modal)
+                close();
+        });
+        const setSubmitting = (on) => {
+            form.querySelectorAll('input,button').forEach((el) => {
+                if (el === cancel) {
+                    el.disabled = on;
+                    return;
+                }
+                el.disabled = on;
+            });
+            if (loadingHint)
+                loadingHint.hidden = !on;
+            if (submit)
+                submit.textContent = this.t(on ? 'index.adding' : 'common.add', on ? 'Adding...' : 'Add');
+        };
+        form.addEventListener('submit', async (ev) => {
+            ev.preventDefault();
+            const domain = form.querySelector('input[name="domain"]')?.value?.trim() || '';
+            if (errorHint)
+                errorHint.hidden = true;
+            if (!domain) {
+                if (errorHint) {
+                    errorHint.textContent = this.t('index.domain_required', 'Domain is required.');
+                    errorHint.hidden = false;
+                }
+                return;
+            }
+            setSubmitting(true);
+            try {
+                const response = await fetch(form.action, {
+                    method: 'POST',
+                    body: new FormData(form),
+                    redirect: 'follow',
+                });
+                if (response.redirected && response.url) {
+                    window.location.href = response.url;
+                    return;
+                }
+                window.location.reload();
+            }
+            catch {
+                if (errorHint) {
+                    errorHint.textContent = this.t('index.request_failed', 'Request failed. Check your connection and try again.');
+                    errorHint.hidden = false;
+                }
+                setSubmitting(false);
+            }
+        });
     }
     formatDuration(seconds) {
         if (seconds == null || !Number.isFinite(seconds) || seconds < 0)
@@ -703,6 +794,7 @@ class MirrorApp {
         this.applyUnreadBadges(readMap);
         const divider = this.addUnreadDivider(readMap);
         this.setupMobileMenu();
+        this.setupAddDomainBox();
         this.setupAddChannelBox();
         this.setupSyncDialog();
         this.setupImageViewer();
