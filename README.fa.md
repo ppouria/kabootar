@@ -40,11 +40,11 @@
 
 ```text
   .---------------.             .-----------------.             .---------------.
-  | kabootar      |   درخواست   | recursive DNS   |   UDP/TCP   | kabootar      |
+  | kabootar      |   درخواست    | recursive DNS   |   UDP/TCP   | kabootar      |
   | client        | ----------> | resolver        | ----------> | server        |
   | web + sync    | <---------- | system/public   | <---------- | DNS bridge    |
   | local SQLite  |   TXT data  '-----------------'   TXT data  | + channel pull|
-  '---------------'                                                 '---------------'
+  '---------------'                                             '---------------'
           |                                                                  |
           | direct mode                                                      | fetch / refresh
           v                                                                  v
