@@ -26,9 +26,9 @@ val buildPythonOverride = (System.getenv("KABOOTAR_BUILD_PYTHON") ?: "").trim()
 val buildPythonCommand = if (buildPythonOverride.isNotBlank()) {
     listOf(buildPythonOverride)
 } else if (System.getProperty("os.name").lowercase().contains("windows")) {
-    listOf("py", "-3.13")
+    listOf("py", "-3.11")
 } else {
-    listOf("python")
+    listOf("python3")
 }
 
 val releaseKeystoreFile = ((project.findProperty("kabootarKeystoreFile") as String?)?.trim() ?: System.getenv("KABOOTAR_KEYSTORE_FILE")?.trim()).orEmpty()
@@ -140,7 +140,8 @@ android {
 
 configure<ChaquopyExtension> {
     defaultConfig {
-        version = "3.13"
+        // Chaquopy-stable runtime for Android packaging
+        version = "3.11"
         buildPython(*buildPythonCommand.toTypedArray())
         pip {
             install("Flask==3.0.3")
@@ -148,7 +149,6 @@ configure<ChaquopyExtension> {
             install("python-dotenv==1.0.1")
             install("requests==2.32.3")
             install("PySocks==1.7.1")
-            install("feedparser==6.0.11")
             install("dnslib==0.9.25")
             install("dnspython==2.6.1")
         }
@@ -163,6 +163,14 @@ configure<ChaquopyExtension> {
 
 tasks.named("preBuild").configure {
     dependsOn(syncKabootarPython)
+}
+
+// Gradle 8+ validation: explicitly declare dependency for Chaquopy merge tasks
+// which consume generatedPythonDir from syncKabootarPython.
+tasks.configureEach {
+    if (name.contains("PythonSources", ignoreCase = true)) {
+        dependsOn(syncKabootarPython)
+    }
 }
 
 dependencies {

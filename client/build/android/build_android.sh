@@ -4,13 +4,30 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 if command -v python3 >/dev/null 2>&1; then
-  python3 -m pip install Pillow cairosvg || echo "WARN: logo renderer dependencies failed. Using existing icon assets."
-  if ! python3 build/assets/prepare_logo_assets.py; then
-    echo "WARN: logo asset preparation failed. Using existing icon assets."
+  PY_ENV="${HOME}/.cache/kabootar/buildpy"
+  python3 -m venv "${PY_ENV}" >/dev/null 2>&1 || true
+  if [[ -x "${PY_ENV}/bin/python" ]]; then
+    "${PY_ENV}/bin/python" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+    "${PY_ENV}/bin/python" -m pip install -q Pillow cairosvg >/dev/null 2>&1 || echo "WARN: logo renderer dependencies failed. Using existing icon assets."
+    if ! "${PY_ENV}/bin/python" build/assets/prepare_logo_assets.py; then
+      echo "WARN: logo asset preparation failed. Using existing icon assets."
+    fi
+  else
+    if ! python3 build/assets/prepare_logo_assets.py; then
+      echo "WARN: logo asset preparation failed. Using existing icon assets."
+    fi
   fi
 fi
 
 cd android
+
+# Auto-wire Android SDK location if available in environment.
+if [[ -n "${ANDROID_SDK_ROOT:-}" ]]; then
+  echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+elif [[ -n "${ANDROID_HOME:-}" ]]; then
+  echo "sdk.dir=${ANDROID_HOME}" > local.properties
+fi
+
 GRADLE_CMD=""
 
 if command -v gradle >/dev/null 2>&1; then
