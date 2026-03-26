@@ -5,16 +5,22 @@ cd "$(dirname "$0")/../.."
 
 if command -v python3 >/dev/null 2>&1; then
   PY_ENV="${HOME}/.cache/kabootar/buildpy"
-  python3 -m venv "${PY_ENV}" >/dev/null 2>&1 || true
-  if [[ -x "${PY_ENV}/bin/python" ]]; then
-    "${PY_ENV}/bin/python" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
-    "${PY_ENV}/bin/python" -m pip install -q Pillow cairosvg >/dev/null 2>&1 || echo "WARN: logo renderer dependencies failed. Using existing icon assets."
-    if ! "${PY_ENV}/bin/python" build/assets/prepare_logo_assets.py; then
+  if python3 -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('PIL') and importlib.util.find_spec('cairosvg') else 1)" >/dev/null 2>&1; then
+    if ! python3 build/assets/prepare_logo_assets.py; then
       echo "WARN: logo asset preparation failed. Using existing icon assets."
     fi
   else
-    if ! python3 build/assets/prepare_logo_assets.py; then
-      echo "WARN: logo asset preparation failed. Using existing icon assets."
+    python3 -m venv "${PY_ENV}" >/dev/null 2>&1 || true
+    if [[ -x "${PY_ENV}/bin/python" ]]; then
+      "${PY_ENV}/bin/python" -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+      "${PY_ENV}/bin/python" -m pip install -q Pillow cairosvg >/dev/null 2>&1 || echo "WARN: logo renderer dependencies failed. Using existing icon assets."
+      if ! "${PY_ENV}/bin/python" build/assets/prepare_logo_assets.py; then
+        echo "WARN: logo asset preparation failed. Using existing icon assets."
+      fi
+    else
+      if ! python3 build/assets/prepare_logo_assets.py; then
+        echo "WARN: logo asset preparation failed. Using existing icon assets."
+      fi
     fi
   fi
 fi
@@ -55,6 +61,7 @@ RELEASE_DIR="app/build/outputs/apk/release"
 UNIVERSAL_SOURCE="${RELEASE_DIR}/app-universal-release.apk"
 [[ -f "${UNIVERSAL_SOURCE}" ]] || UNIVERSAL_SOURCE="${RELEASE_DIR}/app-release.apk"
 ARM64_SOURCE="${RELEASE_DIR}/app-arm64-v8a-release.apk"
+X86_SOURCE="${RELEASE_DIR}/app-x86-release.apk"
 X64_SOURCE="${RELEASE_DIR}/app-x86_64-release.apk"
 
 if [[ ! -f "${UNIVERSAL_SOURCE}" ]]; then
@@ -65,15 +72,21 @@ if [[ ! -f "${ARM64_SOURCE}" ]]; then
   echo "ERROR: arm64-v8a release APK not found" >&2
   exit 1
 fi
+if [[ ! -f "${X86_SOURCE}" ]]; then
+  echo "ERROR: x86 release APK not found" >&2
+  exit 1
+fi
 if [[ ! -f "${X64_SOURCE}" ]]; then
   echo "ERROR: x86_64 release APK not found" >&2
   exit 1
 fi
 cp -f "${UNIVERSAL_SOURCE}" "${RELEASE_DIR}/kabootar-android-universal.apk"
 cp -f "${ARM64_SOURCE}" "${RELEASE_DIR}/kabootar-android-arm64-v8a.apk"
+cp -f "${X86_SOURCE}" "${RELEASE_DIR}/kabootar-android-x86.apk"
 cp -f "${X64_SOURCE}" "${RELEASE_DIR}/kabootar-android-x86_64.apk"
 
 echo "Debug APK: app/build/outputs/apk/debug/app-debug.apk"
 echo "Universal APK: ${RELEASE_DIR}/kabootar-android-universal.apk"
 echo "ARM64 APK: ${RELEASE_DIR}/kabootar-android-arm64-v8a.apk"
+echo "x86 APK: ${RELEASE_DIR}/kabootar-android-x86.apk"
 echo "x86_64 APK: ${RELEASE_DIR}/kabootar-android-x86_64.apk"

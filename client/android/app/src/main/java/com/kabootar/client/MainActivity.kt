@@ -2,6 +2,7 @@ package com.kabootar.client
 
 import android.annotation.SuppressLint
 import android.os.Bundle
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -18,6 +19,7 @@ import java.util.concurrent.Executors
 class MainActivity : AppCompatActivity() {
     companion object {
         private const val BOOTSTRAP_URL = "file:///android_asset/bootstrap.html"
+        private const val TAG = "KabootarAndroid"
     }
 
     private lateinit var webView: WebView
@@ -137,9 +139,17 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     openLocalBackend()
                 }
-            } catch (exc: Exception) {
+            } catch (exc: Throwable) {
+                Log.e(TAG, "Local backend startup failed", exc)
                 backendState = "error"
-                backendMessage = exc.message ?: "Unknown backend startup error"
+                backendMessage = buildString {
+                    append(exc.javaClass.simpleName)
+                    val msg = exc.message?.trim().orEmpty()
+                    if (msg.isNotEmpty()) {
+                        append(": ")
+                        append(msg)
+                    }
+                }.ifBlank { "Unknown backend startup error" }
                 runOnUiThread {
                     loadBootstrap()
                     Toast.makeText(this, "Local backend failed to start", Toast.LENGTH_LONG).show()

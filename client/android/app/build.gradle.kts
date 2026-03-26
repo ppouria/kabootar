@@ -87,7 +87,7 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86_64")
+            abiFilters += listOf("arm64-v8a", "x86", "x86_64")
         }
         buildConfigField("String", "APP_VERSION_NAME", "\"${appVersionName.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("int", "APP_VERSION_CODE", appVersionCode.toString())
@@ -114,7 +114,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "x86_64")
+            include("arm64-v8a", "x86", "x86_64")
             isUniversalApk = true
         }
     }

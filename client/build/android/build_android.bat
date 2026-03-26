@@ -14,9 +14,12 @@ if "%PYTHON_CMD%"=="" (
   echo ERROR: Python not found in PATH.
   exit /b 1
 )
-"%PYTHON_CMD%" -m pip install Pillow cairosvg
+"%PYTHON_CMD%" -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec('PIL') and importlib.util.find_spec('cairosvg') else 1)"
 if errorlevel 1 (
-  echo WARN: logo renderer dependencies failed. Using existing icon assets.
+  "%PYTHON_CMD%" -m pip install Pillow cairosvg
+  if errorlevel 1 (
+    echo WARN: logo renderer dependencies failed. Using existing icon assets.
+  )
 )
 "%PYTHON_CMD%" build\assets\prepare_logo_assets.py
 if errorlevel 1 (
@@ -27,10 +30,17 @@ cd android
 
 set "RUN_GRADLE="
 set "JDK_CACHE=%USERPROFILE%\.cache\kabootar\jdk-17"
+set "JDK_ZIP=%JDK_CACHE%\temurin-jdk-17.zip"
 set "JDK_HOME="
 if defined JAVA_HOME (
   if exist "%JAVA_HOME%\bin\java.exe" (
     set "JDK_HOME=%JAVA_HOME%"
+    goto :jdk_ready
+  )
+)
+for /d %%D in ("%ProgramFiles%\Eclipse Adoptium\jdk-17*" "%ProgramFiles%\Java\jdk-17*" "%ProgramFiles%\Microsoft\jdk-17*" "%ProgramFiles%\Zulu\zulu-17*") do (
+  if exist "%%~fD\bin\java.exe" (
+    set "JDK_HOME=%%~fD"
     goto :jdk_ready
   )
 )
@@ -40,12 +50,28 @@ for /d %%D in ("!JDK_CACHE!\jdk-*") do (
     goto :jdk_ready
   )
 )
+if not defined JDK_HOME if exist "!JDK_ZIP!" (
+  echo Reusing cached Temurin JDK 17 archive...
+  powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$ErrorActionPreference='Stop';" ^
+    "$cache='!JDK_CACHE!';" ^
+    "Get-ChildItem -Path $cache -Directory -Filter 'jdk-*' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;" ^
+    "Expand-Archive -Path '!JDK_ZIP!' -DestinationPath $cache -Force"
+  if not errorlevel 1 (
+    for /d %%D in ("!JDK_CACHE!\jdk-*") do (
+      if exist "%%~fD\bin\java.exe" (
+        set "JDK_HOME=%%~fD"
+        goto :jdk_ready
+      )
+    )
+  )
+)
 if not defined JDK_HOME (
   echo Downloading Temurin JDK 17...
   powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$ErrorActionPreference='Stop';" ^
     "$cache='!JDK_CACHE!';" ^
-    "$zip=Join-Path $cache ('jdk-' + [Guid]::NewGuid().ToString('N') + '.zip');" ^
+    "$zip='!JDK_ZIP!';" ^
     "New-Item -ItemType Directory -Force -Path $cache | Out-Null;" ^
     "Get-ChildItem -Path $cache -Directory -Filter 'jdk-*' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;" ^
     "Invoke-WebRequest -Uri 'https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jdk/hotspot/normal/eclipse' -OutFile $zip;" ^
@@ -102,6 +128,7 @@ set "RELEASE_DIR=app\build\outputs\apk\release"
 set "UNIVERSAL_SOURCE=%RELEASE_DIR%\app-universal-release.apk"
 if not exist "%UNIVERSAL_SOURCE%" set "UNIVERSAL_SOURCE=%RELEASE_DIR%\app-release.apk"
 set "ARM64_SOURCE=%RELEASE_DIR%\app-arm64-v8a-release.apk"
+set "X86_SOURCE=%RELEASE_DIR%\app-x86-release.apk"
 set "X64_SOURCE=%RELEASE_DIR%\app-x86_64-release.apk"
 
 if not exist "%UNIVERSAL_SOURCE%" (
@@ -112,17 +139,23 @@ if not exist "%ARM64_SOURCE%" (
   echo ERROR: arm64-v8a release APK not found
   exit /b 1
 )
+if not exist "%X86_SOURCE%" (
+  echo ERROR: x86 release APK not found
+  exit /b 1
+)
 if not exist "%X64_SOURCE%" (
   echo ERROR: x86_64 release APK not found
   exit /b 1
 )
 copy /Y "%UNIVERSAL_SOURCE%" "%RELEASE_DIR%\kabootar-android-universal.apk" >nul
 copy /Y "%ARM64_SOURCE%" "%RELEASE_DIR%\kabootar-android-arm64-v8a.apk" >nul
+copy /Y "%X86_SOURCE%" "%RELEASE_DIR%\kabootar-android-x86.apk" >nul
 copy /Y "%X64_SOURCE%" "%RELEASE_DIR%\kabootar-android-x86_64.apk" >nul
 
 echo.
 echo Debug APK: app\build\outputs\apk\debug\app-debug.apk
 echo Universal APK: %RELEASE_DIR%\kabootar-android-universal.apk
 echo ARM64 APK: %RELEASE_DIR%\kabootar-android-arm64-v8a.apk
+echo x86 APK: %RELEASE_DIR%\kabootar-android-x86.apk
 echo x86_64 APK: %RELEASE_DIR%\kabootar-android-x86_64.apk
 endlocal

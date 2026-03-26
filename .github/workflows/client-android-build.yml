@@ -93,14 +93,17 @@ jobs:
           RELEASE_DIR="client/android/app/build/outputs/apk/release"
           UNIVERSAL_SOURCE="$(find "${RELEASE_DIR}" -maxdepth 1 -type f \( -name '*universal*release*.apk' -o -name 'app-release.apk' \) | head -n 1)"
           ARM64_SOURCE="$(find "${RELEASE_DIR}" -maxdepth 1 -type f -name '*arm64-v8a*release*.apk' | head -n 1)"
+          X86_SOURCE="$(find "${RELEASE_DIR}" -maxdepth 1 -type f -name '*x86*release*.apk' ! -name '*x86_64*' | head -n 1)"
           X64_SOURCE="$(find "${RELEASE_DIR}" -maxdepth 1 -type f -name '*x86_64*release*.apk' | head -n 1)"
 
           test -n "${UNIVERSAL_SOURCE}" || { echo 'universal APK not found' >&2; exit 1; }
           test -n "${ARM64_SOURCE}" || { echo 'arm64-v8a APK not found' >&2; exit 1; }
+          test -n "${X86_SOURCE}" || { echo 'x86 APK not found' >&2; exit 1; }
           test -n "${X64_SOURCE}" || { echo 'x86_64 APK not found' >&2; exit 1; }
 
           cp "${UNIVERSAL_SOURCE}" "${RELEASE_DIR}/kabootar-android-universal.apk"
           cp "${ARM64_SOURCE}" "${RELEASE_DIR}/kabootar-android-arm64-v8a.apk"
+          cp "${X86_SOURCE}" "${RELEASE_DIR}/kabootar-android-x86.apk"
           cp "${X64_SOURCE}" "${RELEASE_DIR}/kabootar-android-x86_64.apk"
 
       - name: Upload Android APKs
@@ -111,6 +114,7 @@ jobs:
           path: |
             client/android/app/build/outputs/apk/release/kabootar-android-universal.apk
             client/android/app/build/outputs/apk/release/kabootar-android-arm64-v8a.apk
+            client/android/app/build/outputs/apk/release/kabootar-android-x86.apk
             client/android/app/build/outputs/apk/release/kabootar-android-x86_64.apk
           if-no-files-found: error
 
@@ -122,4 +126,5 @@ jobs:
           files: |
             client/android/app/build/outputs/apk/release/kabootar-android-universal.apk
             client/android/app/build/outputs/apk/release/kabootar-android-arm64-v8a.apk
+            client/android/app/build/outputs/apk/release/kabootar-android-x86.apk
             client/android/app/build/outputs/apk/release/kabootar-android-x86_64.apk
