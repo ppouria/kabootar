@@ -563,6 +563,7 @@ class SettingsView {
 
   async mount(): Promise<void> {
     await this.initI18n();
+    if (!this.form) return;
 
     this.hydrateFromHidden();
     this.setupSortable();

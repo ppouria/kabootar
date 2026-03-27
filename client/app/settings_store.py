@@ -29,6 +29,7 @@ DEFAULTS: dict[str, str] = {
     "dns_port": "5533",
     "dns_sources": "",
     "sync_interval_minutes": "1",
+    "settings_password_hash": "",
 }
 
 

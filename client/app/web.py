@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -7,8 +8,9 @@ import threading
 import time
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, url_for
+from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, session, url_for
 from sqlalchemy import func, select
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app.background_sync import background_sync_status, start_background_sync_loop
 from app.config import settings
@@ -373,6 +375,42 @@ def _normalize_channel_list(raw: str | None) -> list[str]:
     return out
 
 
+def _settings_password_hash() -> str:
+    return (get_setting("settings_password_hash", "") or "").strip()
+
+
+def _settings_password_enabled() -> bool:
+    return bool(_settings_password_hash())
+
+
+def _settings_auth_sig(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:24]
+
+
+def _settings_unlocked() -> bool:
+    password_hash = _settings_password_hash()
+    if not password_hash:
+        session.pop("settings_auth_sig", None)
+        return True
+    return (session.get("settings_auth_sig") or "") == _settings_auth_sig(password_hash)
+
+
+def _grant_settings_access() -> None:
+    password_hash = _settings_password_hash()
+    if password_hash:
+        session["settings_auth_sig"] = _settings_auth_sig(password_hash)
+
+
+def _clear_settings_access() -> None:
+    session.pop("settings_auth_sig", None)
+
+
+def _settings_guard_failed():
+    if request.path.startswith("/dns/") or request.is_json:
+        return jsonify({"ok": False, "error": "settings_locked"}), 403
+    return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
+
+
 def _channel_username_from_url(url: str) -> str:
     token = (url or "").strip().rstrip("/")
     if not token:
@@ -626,7 +664,66 @@ def create_app() -> Flask:
 
     @app.get("/settings")
     def settings_page():
-        return render_template("settings.html", settings=all_settings(), message=request.args.get("msg", ""), app_meta=meta.as_dict())
+        app_settings = all_settings()
+        app_settings.pop("settings_password_hash", None)
+        return render_template(
+            "settings.html",
+            settings=app_settings,
+            message=request.args.get("msg", ""),
+            app_meta=meta.as_dict(),
+            settings_locked=not _settings_unlocked(),
+            settings_password_enabled=_settings_password_enabled(),
+        )
+
+    @app.post("/settings/unlock")
+    def settings_unlock():
+        password_hash = _settings_password_hash()
+        if not password_hash:
+            _clear_settings_access()
+            return redirect(url_for("settings_page", msg="Settings password is not set."))
+
+        password = (request.form.get("password") or "").strip()
+        if not password or not check_password_hash(password_hash, password):
+            _clear_settings_access()
+            return redirect(url_for("settings_page", msg="Wrong password."))
+
+        _grant_settings_access()
+        return redirect(url_for("settings_page", msg="Settings unlocked."))
+
+    @app.post("/settings/lock")
+    def settings_lock():
+        _clear_settings_access()
+        return redirect(url_for("settings_page", msg="Settings locked."))
+
+    @app.post("/settings/password")
+    def settings_password_save():
+        password_hash = _settings_password_hash()
+        if password_hash and not _settings_unlocked():
+            return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
+
+        current_password = (request.form.get("current_password") or "").strip()
+        new_password = (request.form.get("new_password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+        remove_password = request.form.get("remove_password") == "1"
+
+        if password_hash:
+            if not current_password or not check_password_hash(password_hash, current_password):
+                return redirect(url_for("settings_page", msg="Current password is wrong."))
+
+        if remove_password:
+            set_setting("settings_password_hash", "")
+            _clear_settings_access()
+            return redirect(url_for("settings_page", msg="Settings password removed."))
+
+        if len(new_password) < 4:
+            return redirect(url_for("settings_page", msg="New password must be at least 4 characters."))
+        if new_password != confirm_password:
+            return redirect(url_for("settings_page", msg="Password confirmation does not match."))
+
+        new_hash = generate_password_hash(new_password)
+        set_setting("settings_password_hash", new_hash)
+        session["settings_auth_sig"] = _settings_auth_sig(new_hash)
+        return redirect(url_for("settings_page", msg="Settings password saved."))
 
     @app.get("/debug")
     def debug_page():
@@ -663,6 +760,9 @@ def create_app() -> Flask:
 
     @app.post("/settings")
     def settings_save():
+        if not _settings_unlocked():
+            return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
+
         source_mode = _normalize_source_mode(request.form.get("source_mode"))
         set_setting("source_mode", source_mode)
 
@@ -729,6 +829,8 @@ def create_app() -> Flask:
 
     @app.post("/dns/domain/check")
     def dns_domain_check():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
         payload = request.get_json(silent=True) or request.form
         domain = (payload.get("domain") or "").strip().rstrip(".").lower()
         password = (payload.get("password") or "").strip()
@@ -750,6 +852,8 @@ def create_app() -> Flask:
 
     @app.get("/dns/domain/health")
     def dns_domain_health():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
         domain = (request.args.get("domain") or "").strip().rstrip(".").lower()
         if not domain:
             return jsonify({"ok": False, "error": "domain_required"}), 400

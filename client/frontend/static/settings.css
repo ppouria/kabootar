@@ -91,6 +91,10 @@
   gap:12px;
 }
 
+.auth-panel{
+  max-width:520px;
+}
+
 .settings-version-card{
   display:flex;
   align-items:center;
@@ -370,6 +374,59 @@
   color:#d4ebff;
   border-radius:12px;
   padding:8px 10px;
+  margin-bottom:12px;
+}
+
+.security-panel{
+  margin-top:12px;
+}
+
+.security-state{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:12px;
+}
+
+.security-chip{
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+  border-radius:999px;
+  padding:6px 12px;
+  font-size:12px;
+  font-weight:700;
+  border:1px solid #35546d;
+  background:#0b1e2d;
+  color:#bbd3e6;
+}
+
+.security-chip.enabled{
+  border-color:#1e8f63;
+  background:rgba(30,143,99,.18);
+  color:#9ef5ce;
+}
+
+.security-chip.disabled{
+  border-color:#6a4d18;
+  background:rgba(155,111,24,.18);
+  color:#ffd99f;
+}
+
+.security-form{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.security-actions{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.security-lock-form{
+  margin-top:10px;
 }
 
 .actions{

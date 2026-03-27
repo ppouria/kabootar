@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="settings.page_title">Settings - Kabootar</title>
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
-  <link rel="stylesheet" href="/static/style.css?v=20260322c" />
-  <link rel="stylesheet" href="/static/settings.css?v=20260322c" />
+  <link rel="stylesheet" href="/static/style.css?v=20260326f" />
+  <link rel="stylesheet" href="/static/settings.css?v=20260327a" />
 </head>
 <body class="settings-page">
   <div class="settings-shell">
@@ -34,9 +34,26 @@
       </div>
     </section>
 
-    <form method="post" class="settings-form" novalidate id="settingsForm">
-      {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
 
+    {% if settings_locked %}
+    <section class="panel auth-panel">
+      <div class="panel-head">
+        <div class="panel-title" data-i18n="settings.locked_title">Settings are locked</div>
+        <div class="panel-sub" data-i18n="settings.locked_sub">Enter the password to open and change client settings.</div>
+      </div>
+      <form method="post" action="/settings/unlock" class="security-form" novalidate>
+        <div class="field">
+          <label class="label" for="settingsUnlockPassword" data-i18n="settings.password_label">Password</label>
+          <input id="settingsUnlockPassword" class="input" type="password" name="password" autocomplete="current-password" data-i18n-placeholder="settings.placeholder.password" placeholder="password" />
+        </div>
+        <div class="actions">
+          <button class="btn-primary" type="submit" data-i18n="settings.unlock_button">Unlock settings</button>
+        </div>
+      </form>
+    </section>
+    {% else %}
+    <form method="post" class="settings-form" novalidate id="settingsForm">
       <div class="settings-grid">
         <section class="panel panel-wide">
           <div class="panel-head">
@@ -126,6 +143,50 @@
         <button class="btn-primary" type="submit" data-i18n="settings.save_settings">Save settings</button>
       </div>
     </form>
+
+    <section class="panel security-panel">
+      <div class="panel-head">
+        <div class="panel-title" data-i18n="settings.security_title">Settings password</div>
+        <div class="panel-sub" data-i18n="settings.security_sub">Lock this page so other people on the same client cannot change the configuration.</div>
+      </div>
+      <div class="security-state">
+        <span class="security-chip {% if settings_password_enabled %}enabled{% else %}disabled{% endif %}">
+          {% if settings_password_enabled %}
+          <span data-i18n="settings.password_enabled">Password enabled</span>
+          {% else %}
+          <span data-i18n="settings.password_disabled">Password is not set</span>
+          {% endif %}
+        </span>
+      </div>
+      <form method="post" action="/settings/password" class="security-form" novalidate>
+        {% if settings_password_enabled %}
+        <div class="field">
+          <label class="label" for="currentPassword" data-i18n="settings.current_password">Current password</label>
+          <input id="currentPassword" class="input" type="password" name="current_password" autocomplete="current-password" data-i18n-placeholder="settings.placeholder.password" placeholder="password" />
+        </div>
+        {% endif %}
+        <div class="field">
+          <label class="label" for="newPassword" data-i18n="settings.new_password">New password</label>
+          <input id="newPassword" class="input" type="password" name="new_password" autocomplete="new-password" data-i18n-placeholder="settings.placeholder.new_password" placeholder="new password" />
+        </div>
+        <div class="field">
+          <label class="label" for="confirmPassword" data-i18n="settings.confirm_password">Confirm password</label>
+          <input id="confirmPassword" class="input" type="password" name="confirm_password" autocomplete="new-password" data-i18n-placeholder="settings.placeholder.confirm_password" placeholder="confirm password" />
+        </div>
+        <div class="security-actions">
+          <button class="btn-primary" type="submit" data-i18n="settings.save_password">Save password</button>
+          {% if settings_password_enabled %}
+          <button class="btn-secondary" type="submit" name="remove_password" value="1" data-i18n="settings.remove_password">Remove password</button>
+          {% endif %}
+        </div>
+      </form>
+      {% if settings_password_enabled %}
+      <form method="post" action="/settings/lock" class="security-lock-form">
+        <button class="btn-secondary" type="submit" data-i18n="settings.lock_button">Lock settings now</button>
+      </form>
+      {% endif %}
+    </section>
+    {% endif %}
   </div>
 
   <div class="modal" id="domainHealthModal" hidden>
@@ -138,6 +199,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/static/settings.js?v=20260322c"></script>
+  <script type="module" src="/static/settings.js?v=20260327a"></script>
 </body>
 </html>
