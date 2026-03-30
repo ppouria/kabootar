@@ -18,6 +18,7 @@ DEFAULTS: dict[str, str] = {
     "dns_resolvers": "",  # lines: resolver or resolver:port
     "dns_domains": "",  # lines: domain|password(optional)
     "dns_query_size": "220",
+    "dns_timeout_seconds": "3",
     "dns_query_retries": "4",
     "dns_meta_retries": "2",
     "dns_use_system_resolver": "1",
@@ -30,6 +31,8 @@ DEFAULTS: dict[str, str] = {
     "dns_sources": "",
     "sync_interval_minutes": "1",
     "settings_password_hash": "",
+    "app_password_hash": "",
+    "app_auth_ttl_days": "7",
 }
 
 

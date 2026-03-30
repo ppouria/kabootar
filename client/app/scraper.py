@@ -67,6 +67,41 @@ def _inner_html(element_html: str) -> str:
     return element_html[start + 1 : end]
 
 
+def _extract_message_blocks(html: str) -> list[str]:
+    start_re = re.compile(
+        r'<div\b[^>]*class=\"[^\"]*tgme_widget_message_wrap[^\"]*\"[^>]*>',
+        flags=re.I | re.S,
+    )
+    token_re = re.compile(r"<div\b[^>]*>|</div>", flags=re.I | re.S)
+
+    blocks: list[str] = []
+    pos = 0
+    while True:
+        match = start_re.search(html, pos)
+        if not match:
+            break
+
+        depth = 0
+        end = None
+        for token in token_re.finditer(html, match.start()):
+            text = token.group(0).lower()
+            if text.startswith("<div") and not text.startswith("</div"):
+                depth += 1
+            else:
+                depth -= 1
+                if depth == 0:
+                    end = token.end()
+                    break
+
+        if not end:
+            break
+
+        blocks.append(html[match.start():end])
+        pos = end
+
+    return blocks
+
+
 def _extract_forward_source(block: str) -> str:
     forward_html = _extract_element_html(block, "tgme_widget_message_forwarded_from", tags=("a", "div"))
     if not forward_html:
@@ -82,6 +117,25 @@ def _extract_forward_source(block: str) -> str:
 
     forward_text = strip_tags(_inner_html(forward_html) or forward_html)
     return re.sub(r"^\s*forwarded from\s+", "", forward_text, flags=re.I).strip()
+
+
+def _extract_media_kind(block: str) -> str:
+    media_patterns = [
+        (r"tgme_widget_message_photo_wrap", "photo"),
+        (r"tgme_widget_message_roundvideo|tgme_widget_message_video_note", "video_note"),
+        (r"tgme_widget_message_video_player|tgme_widget_message_video_wrap", "video"),
+        (r"tgme_widget_message_voice_player|tgme_widget_message_voice", "voice"),
+        (r"tgme_widget_message_audio_player|tgme_widget_message_audio", "audio"),
+        (r"tgme_widget_message_document_wrap|tgme_widget_message_document", "document"),
+        (r"tgme_widget_message_animation|tgme_widget_message_gif", "animation"),
+        (r"tgme_widget_message_sticker", "sticker"),
+    ]
+    for pattern, kind in media_patterns:
+        if re.search(pattern, block, flags=re.I):
+            return kind
+    if re.search(r"tgme_widget_message_media|message_media_not_supported", block, flags=re.I):
+        return "media"
+    return ""
 
 
 def parse_channel_meta(html: str) -> dict:
@@ -103,6 +157,14 @@ def parse_channel_meta(html: str) -> dict:
         m = re.search(r"url\(['\"]?([^'\")]+)", style)
         if m:
             avatar_url = m.group(1).strip()
+    if not avatar_url:
+        photo_img = re.search(r'<i class="tgme_page_photo_image\b[^"]*"[^>]*>\s*<img[^>]+src="([^"]+)"', html, flags=re.I | re.S)
+        if photo_img:
+            avatar_url = photo_img.group(1).strip()
+    if not avatar_url:
+        og_image = re.search(r'<meta\s+property="og:image"\s+content="([^"]*)"', html, flags=re.I)
+        if og_image:
+            avatar_url = unescape(og_image.group(1)).strip()
 
     if avatar_url.startswith("//"):
         avatar_url = "https:" + avatar_url
@@ -128,8 +190,13 @@ def _parse_message_block(block: str) -> Optional[dict]:
     dt = date_match.group(1) if date_match else ""
 
     text_html = _extract_element_html(block, "js-message_text", tags=("div",))
+    if not text_html:
+        text_html = _extract_element_html(block, "tgme_widget_message_text", tags=("div",))
+    if not text_html:
+        text_html = _extract_element_html(block, "tgme_widget_message_caption", tags=("div",))
     text_inner = _inner_html(text_html)
-    has_media = bool(re.search(r'tgme_widget_message_(photo|video|document|voice|audio)', block))
+    media_kind = _extract_media_kind(block)
+    has_media = bool(media_kind)
     photo_url = ""
     photo_style_match = re.search(r'tgme_widget_message_photo_wrap[^>]*style="([^"]+)"', block, flags=re.S)
     if photo_style_match:
@@ -167,6 +234,7 @@ def _parse_message_block(block: str) -> Optional[dict]:
         "published_at": dt,
         "text": text,
         "has_media": has_media,
+        "media_kind": media_kind,
         "photo_url": photo_url,
         "reply_to_message_id": reply_to_message_id,
         "reply_author": reply_author,
@@ -182,7 +250,7 @@ def parse_latest_message(html: str) -> Optional[dict]:
 
 
 def parse_recent_messages(html: str, limit: int = 50) -> list[dict]:
-    blocks = re.findall(r'(<div class="tgme_widget_message_wrap[^>]*>.*?</div>\s*</div>)', html, flags=re.S)
+    blocks = _extract_message_blocks(html)
     if not blocks:
         return []
 

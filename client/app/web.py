@@ -1,14 +1,31 @@
+import base64
 import hashlib
+import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import sys
 import threading
 import time
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 
-from flask import Flask, jsonify, redirect, render_template, request, send_from_directory, session, url_for
+from flask import (
+    Flask,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_file,
+    send_from_directory,
+    session,
+    url_for,
+)
+from PIL import Image
 from sqlalchemy import func, select
 from werkzeug.security import check_password_hash, generate_password_hash
 
@@ -27,6 +44,7 @@ logger = logging.getLogger("kabootar.web")
 _SYNC_JOBS_LOCK = threading.Lock()
 _SYNC_JOBS: dict[str, dict] = {}
 _SYNC_JOB_TTL_SECONDS = 1800
+_APP_AUTH_COOKIE = "kabootar_app_auth"
 
 
 def _cleanup_sync_jobs_locked(now_ts: float | None = None) -> None:
@@ -360,6 +378,23 @@ def _normalize_source_mode(raw: str | None) -> str:
     return mode if mode in {"direct", "dns"} else "dns"
 
 
+def _request_prefers_channel_picker() -> bool:
+    user_agent = (request.headers.get("User-Agent") or "").lower()
+    if not user_agent:
+        return False
+    mobile_tokens = (
+        "android",
+        "iphone",
+        "ipad",
+        "ipod",
+        "mobile",
+        "opera mini",
+        "iemobile",
+        "windows phone",
+    )
+    return any(token in user_agent for token in mobile_tokens)
+
+
 def _normalize_channel_list(raw: str | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
@@ -377,6 +412,120 @@ def _normalize_channel_list(raw: str | None) -> list[str]:
 
 def _settings_password_hash() -> str:
     return (get_setting("settings_password_hash", "") or "").strip()
+
+
+def _app_password_hash() -> str:
+    return (get_setting("app_password_hash", "") or "").strip()
+
+
+def _app_password_enabled() -> bool:
+    return bool(_app_password_hash())
+
+
+def _app_auth_ttl_days() -> int:
+    raw = (get_setting("app_auth_ttl_days", "7") or "7").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 7
+    return max(1, min(365, value))
+
+
+def _app_password_sig(password_hash: str) -> str:
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:24]
+
+
+def _jwt_b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _jwt_b64url_decode(raw: str) -> bytes:
+    token = (raw or "").strip()
+    padding = "=" * ((4 - len(token) % 4) % 4)
+    return base64.urlsafe_b64decode(token + padding)
+
+
+def _jwt_encode(payload: dict[str, object], secret: str) -> str:
+    header = {"alg": "HS256", "typ": "JWT"}
+    header_part = _jwt_b64url_encode(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    payload_part = _jwt_b64url_encode(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    signing_input = f"{header_part}.{payload_part}".encode("ascii")
+    signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+    return f"{header_part}.{payload_part}.{_jwt_b64url_encode(signature)}"
+
+
+def _jwt_decode(token: str, secret: str) -> dict[str, object] | None:
+    try:
+        header_part, payload_part, signature_part = token.split(".", 2)
+        signing_input = f"{header_part}.{payload_part}".encode("ascii")
+        expected_sig = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        actual_sig = _jwt_b64url_decode(signature_part)
+        if not hmac.compare_digest(expected_sig, actual_sig):
+            return None
+        payload = json.loads(_jwt_b64url_decode(payload_part).decode("utf-8"))
+        if not isinstance(payload, dict):
+            return None
+        return payload
+    except Exception:
+        return None
+
+
+def _issue_app_auth_token() -> str:
+    password_hash = _app_password_hash()
+    now_ts = int(time.time())
+    payload = {
+        "sub": "kabootar-app",
+        "purpose": "app_unlock",
+        "iat": now_ts,
+        "exp": now_ts + (_app_auth_ttl_days() * 86400),
+        "pwd": _app_password_sig(password_hash),
+        "jti": secrets.token_hex(8),
+    }
+    return _jwt_encode(payload, settings.app_secret_key)
+
+
+def _app_unlocked() -> bool:
+    password_hash = _app_password_hash()
+    if not password_hash:
+        if request.cookies.get(_APP_AUTH_COOKIE):
+            g.clear_app_auth_cookie = True
+        return True
+    token = (request.cookies.get(_APP_AUTH_COOKIE) or "").strip()
+    if not token:
+        return False
+    payload = _jwt_decode(token, settings.app_secret_key)
+    if not payload:
+        g.clear_app_auth_cookie = True
+        _clear_settings_access()
+        return False
+    if payload.get("purpose") != "app_unlock" or payload.get("sub") != "kabootar-app":
+        g.clear_app_auth_cookie = True
+        _clear_settings_access()
+        return False
+    try:
+        exp = int(payload.get("exp") or 0)
+    except Exception:
+        exp = 0
+    if exp <= int(time.time()):
+        g.clear_app_auth_cookie = True
+        _clear_settings_access()
+        return False
+    if str(payload.get("pwd") or "") != _app_password_sig(password_hash):
+        g.clear_app_auth_cookie = True
+        _clear_settings_access()
+        return False
+    return True
+
+
+def _grant_app_access() -> None:
+    if _app_password_enabled():
+        g.app_auth_token = _issue_app_auth_token()
+        g.clear_app_auth_cookie = False
+
+
+def _clear_app_access() -> None:
+    g.app_auth_token = ""
+    g.clear_app_auth_cookie = True
 
 
 def _settings_password_enabled() -> bool:
@@ -405,8 +554,57 @@ def _clear_settings_access() -> None:
     session.pop("settings_auth_sig", None)
 
 
+def _request_lang() -> str:
+    raw = (request.headers.get("Accept-Language") or "").lower()
+    return "fa" if raw.startswith("fa") or ",fa" in raw else "en"
+
+
+def _app_unlock_copy() -> dict[str, str]:
+    if _request_lang() == "fa":
+        return {
+            "title": "ورود به کبوتر",
+            "subtitle": "برای ورود به برنامه، پسورد اپ را وارد کن.",
+            "password_label": "پسورد اپ",
+            "unlock_button": "ورود",
+            "back_label": "بازگشت",
+            "wrong_password": "پسورد اشتباه است.",
+        }
+    return {
+        "title": "Unlock Kabootar",
+        "subtitle": "Enter the app password to continue.",
+        "password_label": "App password",
+        "unlock_button": "Unlock",
+        "back_label": "Back",
+        "wrong_password": "Wrong password.",
+    }
+
+
+def _safe_next_path(raw: str | None) -> str:
+    value = (raw or "").strip()
+    if not value.startswith("/") or value.startswith("//"):
+        return "/"
+    return value
+
+
+def _app_guard_failed(meta: dict[str, object]):
+    if request.path.startswith(("/debug", "/dns")) or request.path in {"/app/meta", "/sync-now", "/debug/state"} or request.is_json:
+        return jsonify({"ok": False, "error": "app_locked"}), 401
+    if request.method == "GET":
+        return (
+            render_template(
+                "app_unlock.html",
+                app_meta=meta,
+                message=request.args.get("msg", ""),
+                unlock_copy=_app_unlock_copy(),
+                next_path=_safe_next_path(request.full_path[:-1] if request.full_path.endswith("?") else request.full_path),
+            ),
+            401,
+        )
+    return redirect(url_for("index", msg="App is locked. Enter password."))
+
+
 def _settings_guard_failed():
-    if request.path.startswith("/dns/") or request.is_json:
+    if request.path.startswith(("/dns/", "/debug")) or request.path == "/debug/state" or request.is_json:
         return jsonify({"ok": False, "error": "settings_locked"}), 403
     return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
 
@@ -444,6 +642,8 @@ def _ensure_channel_rows(db, channels: list[str]) -> bool:
                         source_url=url,
                         title=username,
                         avatar_url="",
+                        avatar_mime="",
+                        avatar_b64="",
                     )
                 )
                 changed = True
@@ -630,10 +830,33 @@ def _resolve_frontend_dirs() -> tuple[Path, Path]:
     return here / "frontend" / "templates", here / "frontend" / "static"
 
 
+@lru_cache(maxsize=1)
+def _load_logo_png_master() -> bytes:
+    _, static_dir = _resolve_frontend_dirs()
+    svg_path = static_dir / "kabootar.svg"
+    svg_text = svg_path.read_text(encoding="utf-8")
+    match = re.search(r'data:image/png;base64,\s*([^"]+)"', svg_text, flags=re.IGNORECASE | re.DOTALL)
+    if not match:
+        raise RuntimeError(f"embedded PNG data not found in {svg_path}")
+    raw = re.sub(r"\s+", "", match.group(1))
+    return base64.b64decode(raw)
+
+
+@lru_cache(maxsize=8)
+def _logo_png_bytes(size: int) -> bytes:
+    size = max(32, min(1024, int(size or 180)))
+    image = Image.open(BytesIO(_load_logo_png_master())).convert("RGBA")
+    resized = image.resize((size, size), Image.Resampling.LANCZOS)
+    buf = BytesIO()
+    resized.save(buf, format="PNG")
+    return buf.getvalue()
+
+
 def create_app() -> Flask:
     setup_logging()
     ensure_schema()
     meta = app_meta()
+    meta_dict = meta.as_dict()
     template_dir, static_dir = _resolve_frontend_dirs()
     app = Flask(__name__, template_folder=str(template_dir), static_folder=str(static_dir))
     app.config["SECRET_KEY"] = settings.app_secret_key
@@ -648,8 +871,87 @@ def create_app() -> Flask:
         resp.headers["Cache-Control"] = "no-cache"
         return resp
 
+    @app.before_request
+    def enforce_app_auth():
+        g.app_auth_token = None
+        g.clear_app_auth_cookie = False
+        exempt = {
+            "static",
+            "sw",
+            "apple_touch_icon",
+            "pwa_icon_192",
+            "pwa_icon_512",
+            "web_manifest",
+            "app_unlock",
+        }
+        if request.endpoint in exempt or request.path.startswith("/static/"):
+            return None
+        if _app_unlocked():
+            return None
+        return _app_guard_failed(meta_dict)
+
+    @app.get("/apple-touch-icon.png")
+    def apple_touch_icon():
+        return send_file(BytesIO(_logo_png_bytes(180)), mimetype="image/png", max_age=86400)
+
+    @app.get("/pwa/icon-192.png")
+    def pwa_icon_192():
+        return send_file(BytesIO(_logo_png_bytes(192)), mimetype="image/png", max_age=86400)
+
+    @app.get("/pwa/icon-512.png")
+    def pwa_icon_512():
+        return send_file(BytesIO(_logo_png_bytes(512)), mimetype="image/png", max_age=86400)
+
+    @app.get("/manifest.webmanifest")
+    def web_manifest():
+        manifest = {
+            "id": "/",
+            "name": meta.app_name,
+            "short_name": meta.app_name,
+            "description": "Kabootar web client",
+            "lang": "fa",
+            "dir": "auto",
+            "start_url": "/",
+            "scope": "/",
+            "display": "standalone",
+            "background_color": "#081018",
+            "theme_color": "#081018",
+            "icons": [
+                {
+                    "src": "/pwa/icon-192.png",
+                    "sizes": "192x192",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+                {
+                    "src": "/pwa/icon-512.png",
+                    "sizes": "512x512",
+                    "type": "image/png",
+                    "purpose": "any maskable",
+                },
+            ],
+        }
+        return app.response_class(
+            json.dumps(manifest, ensure_ascii=False, separators=(",", ":")),
+            mimetype="application/manifest+json",
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @app.after_request
     def add_cache_headers(resp):
+        app_auth_token = getattr(g, "app_auth_token", None)
+        if getattr(g, "clear_app_auth_cookie", False):
+            resp.delete_cookie(_APP_AUTH_COOKIE, path="/", samesite="Lax")
+        elif app_auth_token:
+            resp.set_cookie(
+                _APP_AUTH_COOKIE,
+                app_auth_token,
+                max_age=_app_auth_ttl_days() * 86400,
+                httponly=True,
+                secure=request.is_secure,
+                samesite="Lax",
+                path="/",
+            )
         if request.path.startswith("/static/"):
             resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
         elif request.path in {"/", "/settings", "/debug", "/debug/state"}:
@@ -660,19 +962,54 @@ def create_app() -> Flask:
 
     @app.get("/app/meta")
     def app_meta_json():
-        return jsonify(meta.as_dict())
+        return jsonify(meta_dict)
+
+    @app.post("/app/unlock")
+    def app_unlock():
+        password_hash = _app_password_hash()
+        next_path = _safe_next_path(request.form.get("next"))
+        unlock_copy = _app_unlock_copy()
+        if not password_hash:
+            _clear_app_access()
+            return redirect(next_path or url_for("index"))
+
+        password = (request.form.get("password") or "").strip()
+        if not password or not check_password_hash(password_hash, password):
+            return (
+                render_template(
+                    "app_unlock.html",
+                    app_meta=meta_dict,
+                    message=unlock_copy["wrong_password"],
+                    unlock_copy=unlock_copy,
+                    next_path=next_path or "/",
+                ),
+                401,
+            )
+
+        _grant_app_access()
+        return redirect(next_path or url_for("index"))
+
+    @app.post("/app/lock")
+    def app_lock():
+        _clear_app_access()
+        _clear_settings_access()
+        return redirect(url_for("index", msg="App locked."))
 
     @app.get("/settings")
     def settings_page():
-        app_settings = all_settings()
+        settings_locked = not _settings_unlocked()
+        app_settings = {} if settings_locked else all_settings()
         app_settings.pop("settings_password_hash", None)
+        app_settings.pop("app_password_hash", None)
         return render_template(
             "settings.html",
             settings=app_settings,
             message=request.args.get("msg", ""),
-            app_meta=meta.as_dict(),
-            settings_locked=not _settings_unlocked(),
+            app_meta=meta_dict,
+            settings_locked=settings_locked,
             settings_password_enabled=_settings_password_enabled(),
+            app_password_enabled=_app_password_enabled(),
+            app_auth_ttl_days=_app_auth_ttl_days(),
         )
 
     @app.post("/settings/unlock")
@@ -697,6 +1034,8 @@ def create_app() -> Flask:
 
     @app.post("/settings/password")
     def settings_password_save():
+        if not _app_unlocked():
+            return _app_guard_failed(meta_dict)
         password_hash = _settings_password_hash()
         if password_hash and not _settings_unlocked():
             return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
@@ -725,12 +1064,61 @@ def create_app() -> Flask:
         session["settings_auth_sig"] = _settings_auth_sig(new_hash)
         return redirect(url_for("settings_page", msg="Settings password saved."))
 
+    @app.post("/app/password")
+    def app_password_save():
+        if not _settings_unlocked():
+            return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
+
+        password_hash = _app_password_hash()
+        current_password = (request.form.get("current_password") or "").strip()
+        new_password = (request.form.get("new_password") or "").strip()
+        confirm_password = (request.form.get("confirm_password") or "").strip()
+        remove_password = request.form.get("remove_password") == "1"
+
+        ttl_raw = (request.form.get("ttl_days") or str(_app_auth_ttl_days())).strip()
+        try:
+            ttl_days = int(ttl_raw)
+        except Exception:
+            ttl_days = _app_auth_ttl_days()
+        ttl_days = max(1, min(365, ttl_days))
+        set_setting("app_auth_ttl_days", ttl_days)
+
+        if password_hash:
+            if not current_password or not check_password_hash(password_hash, current_password):
+                return redirect(url_for("settings_page", msg="Current app password is wrong."))
+
+        if remove_password:
+            set_setting("app_password_hash", "")
+            _clear_app_access()
+            return redirect(url_for("settings_page", msg="App password removed."))
+
+        if not new_password and not password_hash:
+            return redirect(url_for("settings_page", msg="App session duration saved."))
+
+        if not new_password and password_hash:
+            _grant_app_access()
+            return redirect(url_for("settings_page", msg="App session duration saved."))
+
+        if len(new_password) < 4:
+            return redirect(url_for("settings_page", msg="New app password must be at least 4 characters."))
+        if new_password != confirm_password:
+            return redirect(url_for("settings_page", msg="App password confirmation does not match."))
+
+        new_hash = generate_password_hash(new_password)
+        set_setting("app_password_hash", new_hash)
+        _grant_app_access()
+        return redirect(url_for("settings_page", msg="App password saved."))
+
     @app.get("/debug")
     def debug_page():
+        if not _settings_unlocked():
+            return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
         return render_template("debug.html")
 
     @app.get("/debug/state")
     def debug_state():
+        if not _settings_unlocked():
+            return jsonify({"ok": False, "error": "settings_locked"}), 403
         app_settings = all_settings()
         channel_list = _normalize_channel_list(app_settings.get("direct_channels", ""))
         domain_list = [line for line in (app_settings.get("dns_domains", "") or "").splitlines() if line.strip()]
@@ -779,6 +1167,7 @@ def create_app() -> Flask:
             "dns_resolvers",
             "dns_domains",
             "dns_query_size",
+            "dns_timeout_seconds",
             "sync_interval_minutes",
         ]
         for f in fields:
@@ -933,6 +1322,8 @@ def create_app() -> Flask:
                             source_url=url,
                             title=username,
                             avatar_url="",
+                            avatar_mime="",
+                            avatar_b64="",
                         )
                     )
                 db.commit()
@@ -972,6 +1363,8 @@ def create_app() -> Flask:
         if push_error:
             base_msg = f"{base_msg};{push_error}"
         if channels:
+            if _request_prefers_channel_picker():
+                return redirect(url_for('index', msg=base_msg))
             return redirect(url_for('index', channel=channels[0], msg=base_msg))
         return redirect(url_for('index', msg=base_msg))
 
@@ -993,6 +1386,7 @@ def create_app() -> Flask:
     @app.get("/")
     def index():
         selected = request.args.get("channel")
+        prefer_picker = _request_prefers_channel_picker()
         ui_msg = request.args.get("msg", "")
         app_settings = all_settings()
         source_mode = _normalize_source_mode(app_settings.get("source_mode"))
@@ -1021,10 +1415,10 @@ def create_app() -> Flask:
             else:
                 channels = db.scalars(select(Channel).order_by(Channel.username.asc())).all()
 
-            if not selected and channels:
+            if not selected and channels and not prefer_picker:
                 selected = channels[0].source_url
             elif selected and configured_channels and selected not in configured_set:
-                selected = channels[0].source_url if channels else None
+                selected = None if prefer_picker else (channels[0].source_url if channels else None)
 
             selected_channel = None
             if selected:

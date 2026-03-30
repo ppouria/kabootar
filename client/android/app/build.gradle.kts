@@ -15,8 +15,8 @@ if (versionFile.isFile) {
     versionFile.inputStream().use { input -> versionProps.load(input) }
 }
 
-val appVersionName = (versionProps.getProperty("version_name") ?: "0.1.1").trim().ifBlank { "0.1.1" }
-val appVersionCode = ((versionProps.getProperty("version_code") ?: "2").trim().toIntOrNull() ?: 2).coerceAtLeast(1)
+val appVersionName = (versionProps.getProperty("version_name") ?: "0.4.0").trim().ifBlank { "0.4.0" }
+val appVersionCode = ((versionProps.getProperty("version_code") ?: "5").trim().toIntOrNull() ?: 5).coerceAtLeast(1)
 val appName = (versionProps.getProperty("app_name") ?: "Kabootar").trim().ifBlank { "Kabootar" }
 val releaseChannel = (versionProps.getProperty("release_channel") ?: "stable").trim().ifBlank { "stable" }
 val androidBackendPort = ((project.findProperty("kabootarLocalPort") as String?)?.trim()?.toIntOrNull()

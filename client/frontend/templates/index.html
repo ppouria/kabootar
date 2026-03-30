@@ -5,7 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="index.page_title">Kabootar</title>
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
-  <link rel="stylesheet" href="/static/style.css?v=20260326f" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#081018" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Kabootar" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="stylesheet" href="/static/style.css?v=20260328d" />
 </head>
 <body>
   <div class="layout">
@@ -72,7 +79,9 @@
         data-latest-id="{{ latest_id }}"
         data-search-text="{{ ((ch.title or ('@' ~ ch.username)) ~ ' ' ~ ch.source_url ~ ' @' ~ ch.username) | lower }}"
       >
-        {% if ch.avatar_url %}
+        {% if ch.avatar_b64 %}
+        <img class="avatar" src="data:{{ ch.avatar_mime or 'image/jpeg' }};base64,{{ ch.avatar_b64 }}" alt="{{ ch.title or ch.username }}" loading="lazy" />
+        {% elif ch.avatar_url %}
         <img class="avatar" src="{{ ch.avatar_url }}" alt="{{ ch.title or ch.username }}" loading="lazy" referrerpolicy="no-referrer" />
         {% else %}
         <div class="avatar avatar-fallback" aria-hidden="true">{{ ((ch.username or '?')[:2]) | upper }}</div>
@@ -98,7 +107,9 @@
       <div class="chat-header">
         <button class="mobile-menu-btn" id="menuBtn" data-i18n-title="index.open_channels" aria-label="Open channels">☰</button>
         {% if selected_channel %}
-        {% if selected_channel.avatar_url %}
+        {% if selected_channel.avatar_b64 %}
+        <img class="header-avatar" src="data:{{ selected_channel.avatar_mime or 'image/jpeg' }};base64,{{ selected_channel.avatar_b64 }}" alt="{{ selected_channel.title or selected_channel.username }}" />
+        {% elif selected_channel.avatar_url %}
         <img class="header-avatar" src="{{ selected_channel.avatar_url }}" alt="{{ selected_channel.title or selected_channel.username }}" referrerpolicy="no-referrer" />
         {% else %}
         <div class="header-avatar avatar-fallback" aria-hidden="true">{{ ((selected_channel.username or '?')[:2]) | upper }}</div>
@@ -190,6 +201,17 @@
             <span class="forward-source" dir="auto">{{ m.forward_source }}</span>
           </div>
           {% endif %}
+          {% set has_unsupported_media = m.has_media and not m.photo_b64 %}
+          {% if has_unsupported_media %}
+          <div class="unsupported-media-note">
+            <div class="unsupported-media-title" data-i18n="index.unsupported_media_title">Unsupported media</div>
+            <div
+              class="unsupported-media-copy"
+              data-media-kind="{{ m.media_kind or 'media' }}"
+              dir="auto"
+            >{{ m.unsupported_media_notice or 'This message contains unsupported media.' }}</div>
+          </div>
+          {% endif %}
           {% if m.reply_to_message_id or m.reply_author or m.reply_text %}
           {% if m.reply_to_message_id %}
           <a class="reply-block" href="#msg-{{ m.reply_to_message_id }}">
@@ -218,7 +240,16 @@
             />
           </div>
           {% endif %}
+          {% if m.text %}
+          {% if has_unsupported_media %}
+          <div class="caption-block">
+            <div class="caption-label" data-i18n="index.caption_label">Caption</div>
+            <div class="text caption-text" dir="auto">{{ m.text }}</div>
+          </div>
+          {% else %}
           <div class="text" dir="auto">{{ m.text }}</div>
+          {% endif %}
+          {% endif %}
           <div class="meta">
             <span>#{{ m.message_id }}</span>
             <span class="time" data-iso="{{ m.published_at }}">{{ m.published_at }}</span>
@@ -356,6 +387,17 @@
     </div>
   </div>
 
-  <script type="module" src="/static/index.js?v=20260326f"></script>
+  <div class="install-prompt" id="installPrompt" hidden>
+    <div class="install-prompt-copy">
+      <div class="install-prompt-title" id="installPromptTitle" data-i18n="index.install_prompt_title">Add Kabootar to your home screen</div>
+      <div class="install-prompt-text" id="installPromptText" data-i18n="index.install_prompt_android">Install this web app for faster access and a full-screen experience.</div>
+    </div>
+    <div class="install-prompt-actions">
+      <button type="button" class="lite-btn install-prompt-primary" id="installPromptAction" data-i18n="index.install_prompt_action">Add to Home</button>
+      <button type="button" class="lite-btn install-prompt-dismiss" id="installPromptDismiss" data-i18n="common.close">Close</button>
+    </div>
+  </div>
+
+  <script type="module" src="/static/index.js?v=20260328c"></script>
 </body>
 </html>

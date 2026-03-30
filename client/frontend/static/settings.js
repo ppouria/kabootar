@@ -5,6 +5,7 @@ class SettingsView {
         this.directSection = document.getElementById('directSection');
         this.dnsSection = document.getElementById('dnsSection');
         this.querySizeInput = document.getElementById('dnsQuerySize');
+        this.dnsTimeoutInput = document.getElementById('dnsTimeoutSeconds');
         this.syncInput = document.getElementById('syncInterval');
         this.directChannelsHidden = document.getElementById('direct_channels');
         this.dnsClientChannelsHidden = document.getElementById('dns_client_channels');
@@ -544,6 +545,17 @@ class SettingsView {
             });
         });
     }
+    clampNumberField(input, min, max) {
+        if (!input)
+            return;
+        const raw = (input.value || '').trim();
+        if (!raw)
+            return;
+        const n = Number(raw);
+        if (!Number.isFinite(n) || n <= 0)
+            return;
+        input.value = String(Math.max(min, Math.min(max, Math.floor(n))));
+    }
     async mount() {
         await this.initI18n();
         if (!this.form)
@@ -565,16 +577,12 @@ class SettingsView {
             if (ev.target === this.domainHealthModal)
                 this.closeDomainHealthDialog();
         });
-        this.querySizeInput?.addEventListener('input', () => {
-            const n = Number(this.querySizeInput?.value || '60');
-            if (Number.isFinite(n) && n > 0)
-                this.querySizeInput.value = String(Math.max(16, Math.min(220, Math.floor(n))));
-        });
-        this.syncInput?.addEventListener('input', () => {
-            const n = Number(this.syncInput?.value || '1');
-            if (Number.isFinite(n) && n > 0)
-                this.syncInput.value = String(Math.max(1, Math.min(59, Math.floor(n))));
-        });
+        this.querySizeInput?.addEventListener('change', () => this.clampNumberField(this.querySizeInput, 16, 220));
+        this.querySizeInput?.addEventListener('blur', () => this.clampNumberField(this.querySizeInput, 16, 220));
+        this.dnsTimeoutInput?.addEventListener('change', () => this.clampNumberField(this.dnsTimeoutInput, 1, 30));
+        this.dnsTimeoutInput?.addEventListener('blur', () => this.clampNumberField(this.dnsTimeoutInput, 1, 30));
+        this.syncInput?.addEventListener('change', () => this.clampNumberField(this.syncInput, 1, 59));
+        this.syncInput?.addEventListener('blur', () => this.clampNumberField(this.syncInput, 1, 59));
         this.sourceMode?.addEventListener('change', () => this.toggleSections());
         this.toggleSections();
         await this.hydrateDomainHealthBadges();

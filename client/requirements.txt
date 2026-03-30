@@ -7,4 +7,5 @@ PySocks==1.7.1
 feedparser==6.0.11
 dnslib==0.9.25
 dnspython==2.6.1
+Pillow==10.4.0
 git+https://github.com/ppouria/persian-encoder.git@aafcdad87bef8df598c66ebbd4e827feb664c71e

@@ -77,6 +77,7 @@ def _text_message_weight(message: dict) -> int:
     return (
         96
         + _utf8_len(message.get("text", ""))
+        + _utf8_len(message.get("media_kind", ""))
         + _utf8_len(message.get("reply_author", ""))
         + _utf8_len(message.get("reply_text", ""))
         + _utf8_len(message.get("forward_source", ""))
@@ -116,7 +117,32 @@ def _normalize_photo_payload(photo_b64: str, photo_mime: str) -> tuple[str, str]
         return "", ""
 
 
-def _ensure_channel_row(db, source_url: str, username: str = "", title: str = "", avatar_url: str = "") -> Channel:
+def _normalize_avatar_payload(avatar_b64: str, avatar_mime: str) -> tuple[str, str]:
+    payload = (avatar_b64 or "").strip()
+    mime = (avatar_mime or "").strip()
+    if not payload:
+        return "", ""
+    try:
+        avatar_bytes = base64.b64decode(payload, validate=True)
+        if not avatar_bytes:
+            return "", ""
+        if len(avatar_bytes) > 180_000:
+            return "", ""
+        return base64.b64encode(avatar_bytes).decode("ascii"), mime if mime.startswith("image/") else "image/jpeg"
+    except Exception:
+        return "", ""
+
+
+def _ensure_channel_row(
+    db,
+    source_url: str,
+    username: str = "",
+    title: str = "",
+    avatar_url: str = "",
+    avatar_mime: str = "",
+    avatar_b64: str = "",
+) -> Channel:
+    avatar_b64, avatar_mime = _normalize_avatar_payload(avatar_b64, avatar_mime)
     ch = db.scalar(select(Channel).where(Channel.source_url == source_url))
     if not ch:
         ch = Channel(
@@ -124,6 +150,8 @@ def _ensure_channel_row(db, source_url: str, username: str = "", title: str = ""
             source_url=source_url,
             title=title or source_url.rsplit("/", 1)[-1],
             avatar_url=avatar_url or "",
+            avatar_mime=avatar_mime or "",
+            avatar_b64=avatar_b64 or "",
         )
         db.add(ch)
         db.flush()
@@ -131,12 +159,27 @@ def _ensure_channel_row(db, source_url: str, username: str = "", title: str = ""
 
     if title and ch.title != title:
         ch.title = title
-    if avatar_url and ch.avatar_url != avatar_url:
+    avatar_changed = bool(avatar_url and ch.avatar_url != avatar_url)
+    if avatar_changed:
         ch.avatar_url = avatar_url
+        if not avatar_b64:
+            ch.avatar_mime = ""
+            ch.avatar_b64 = ""
+    if avatar_mime and ch.avatar_mime != avatar_mime:
+        ch.avatar_mime = avatar_mime
+    if avatar_b64 and ch.avatar_b64 != avatar_b64:
+        ch.avatar_b64 = avatar_b64
     if username and ch.username != username:
         ch.username = username
     db.flush()
     return ch
+
+
+def _channel_has_cached_avatar(db, source_url: str) -> bool:
+    if not source_url:
+        return False
+    ch = db.scalar(select(Channel).where(Channel.source_url == source_url))
+    return bool((getattr(ch, "avatar_b64", "") or "").strip()) if ch else False
 
 
 def _upsert_text_message(db, channel_id: int, message: dict) -> bool:
@@ -147,6 +190,7 @@ def _upsert_text_message(db, channel_id: int, message: dict) -> bool:
     published_at = message.get("published_at", "")
     text = message.get("text", "")
     has_media = bool(message.get("has_media"))
+    media_kind = message.get("media_kind", "") or ""
     reply_to_message_id = int(message.get("reply_to_message_id") or 0) or None
     reply_author = message.get("reply_author", "") or ""
     reply_text = message.get("reply_text", "") or ""
@@ -163,6 +207,9 @@ def _upsert_text_message(db, channel_id: int, message: dict) -> bool:
             changed = True
         if bool(existing.has_media) != has_media:
             existing.has_media = has_media
+            changed = True
+        if existing.media_kind != media_kind:
+            existing.media_kind = media_kind
             changed = True
         if existing.reply_to_message_id != reply_to_message_id:
             existing.reply_to_message_id = reply_to_message_id
@@ -185,6 +232,7 @@ def _upsert_text_message(db, channel_id: int, message: dict) -> bool:
             published_at=published_at,
             text=text,
             has_media=has_media,
+            media_kind=media_kind,
             photo_mime="",
             photo_b64="",
             reply_to_message_id=reply_to_message_id,
@@ -203,12 +251,16 @@ def _upsert_media_message(db, channel_id: int, message: dict) -> bool:
 
     photo_b64, photo_mime = _normalize_photo_payload(message.get("photo_b64", "") or "", message.get("photo_mime", "") or "")
     has_media = bool(message.get("has_media")) or bool(photo_b64)
+    media_kind = message.get("media_kind", "") or ("photo" if photo_b64 else "")
 
     existing = db.scalar(select(Message).where(Message.channel_id == channel_id, Message.message_id == msg_id))
     if existing:
         changed = False
         if bool(existing.has_media) != has_media:
             existing.has_media = has_media
+            changed = True
+        if media_kind and existing.media_kind != media_kind:
+            existing.media_kind = media_kind
             changed = True
         if existing.photo_mime != photo_mime:
             existing.photo_mime = photo_mime
@@ -225,6 +277,7 @@ def _upsert_media_message(db, channel_id: int, message: dict) -> bool:
             published_at="",
             text="",
             has_media=has_media,
+            media_kind=media_kind,
             photo_mime=photo_mime,
             photo_b64=photo_b64,
             reply_to_message_id=None,
@@ -314,6 +367,7 @@ class BridgeCache:
                         "published_at": m.get("published_at", ""),
                         "text": m.get("text", ""),
                         "has_media": bool(m.get("has_media")),
+                        "media_kind": m.get("media_kind", "") or "",
                         "photo_mime": photo_mime,
                         "photo_b64": photo_b64,
                         "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
@@ -742,18 +796,29 @@ def _ordered_resolvers(targets: list[DnsResolverTarget]) -> list[DnsResolverTarg
 
 
 def _resolver_for_target(target: DnsResolverTarget) -> dns.resolver.Resolver:
+    timeout_seconds = _dns_timeout_seconds()
+    lifetime_seconds = min(60.0, max(timeout_seconds + 1.6, timeout_seconds * 1.9))
     if target.use_system:
         r = dns.resolver.Resolver(configure=True)
-        r.timeout = 2.6
-        r.lifetime = 5.0
+        r.timeout = timeout_seconds
+        r.lifetime = lifetime_seconds
         return r
 
     r = dns.resolver.Resolver(configure=False)
     r.nameservers = [target.server]
     r.nameserver_ports = {target.server: target.port}
-    r.timeout = 2.4
-    r.lifetime = 4.6
+    r.timeout = timeout_seconds
+    r.lifetime = lifetime_seconds
     return r
+
+
+def _dns_timeout_seconds() -> float:
+    raw = (get_setting("dns_timeout_seconds", "3") or "3").strip()
+    try:
+        value = float(raw)
+    except Exception:
+        value = 3.0
+    return max(1.0, min(30.0, value))
 
 
 def _query_retry_count() -> int:
@@ -795,7 +860,7 @@ def _query_txt_via_nslookup(name: str, target: DnsResolverTarget) -> list[bytes]
         text=True,
         encoding="utf-8",
         errors="replace",
-        timeout=15,
+        timeout=max(3.0, min(45.0, _dns_timeout_seconds() + 1.0)),
         check=False,
     )
     output = "\n".join(x for x in [proc.stdout, proc.stderr] if x)
@@ -1368,7 +1433,8 @@ def _sync_staged_channel(
     cached_media_crc = str(cached.get("media_crc", "") or "")
     cached_work_total = int(cached.get("message_total", 0) or 0) + int(cached.get("media_total", 0) or 0)
 
-    if cached_source and cached_text_crc == text_crc and cached_media_crc == media_crc:
+    has_cached_avatar = _channel_has_cached_avatar(db, cached_source)
+    if cached_source and cached_text_crc == text_crc and cached_media_crc == media_crc and has_cached_avatar:
         _emit_progress(
             progress,
             kind="channel_plan",
@@ -1400,6 +1466,8 @@ def _sync_staged_channel(
     ch = None
     need_text = not (cached_source and cached_text_crc == text_crc)
     need_media = not (cached_source and cached_media_crc == media_crc)
+    if cached_source and not has_cached_avatar and text_bundle_total > 0:
+        need_text = True
     if not need_text and cached_source:
         ch = db.scalar(select(Channel).where(Channel.source_url == cached_source))
         if ch is None and text_bundle_total > 0:
@@ -1434,6 +1502,8 @@ def _sync_staged_channel(
                 username=(bundle_payload.get("username") or source_url.rsplit("/", 1)[-1]),
                 title=(bundle_payload.get("title", "") or source_url.rsplit("/", 1)[-1]),
                 avatar_url=bundle_payload.get("avatar_url", ""),
+                avatar_mime=bundle_payload.get("avatar_mime", ""),
+                avatar_b64=bundle_payload.get("avatar_b64", ""),
             )
             _emit_progress(
                 progress,
@@ -1605,7 +1675,8 @@ def _sync_legacy_channel(
         )
         return 0, 0, ""
 
-    if cached_source and cached_crc and cached_crc == crc:
+    has_cached_avatar = _channel_has_cached_avatar(db, cached_source)
+    if cached_source and cached_crc and cached_crc == crc and has_cached_avatar:
         cached_total = cached_messages + cached_media_total
         _emit_progress(
             progress,
@@ -1645,6 +1716,7 @@ def _sync_legacy_channel(
                 "published_at": m.get("published_at", ""),
                 "text": m.get("text", ""),
                 "has_media": bool(m.get("has_media")),
+                "media_kind": m.get("media_kind", "") or "",
                 "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
                 "reply_author": m.get("reply_author", "") or "",
                 "reply_text": m.get("reply_text", "") or "",
@@ -1659,6 +1731,7 @@ def _sync_legacy_channel(
             {
                 "message_id": int(m.get("message_id") or 0),
                 "has_media": bool(m.get("has_media")),
+                "media_kind": m.get("media_kind", "") or "",
                 "photo_mime": m.get("photo_mime", "") or "",
                 "photo_b64": m.get("photo_b64", "") or "",
             }
@@ -1693,6 +1766,8 @@ def _sync_legacy_channel(
         username=(payload.get("username") or source_url.rsplit("/", 1)[-1]),
         title=(payload.get("title", "") or source_url.rsplit("/", 1)[-1]),
         avatar_url=payload.get("avatar_url", ""),
+        avatar_mime=payload.get("avatar_mime", ""),
+        avatar_b64=payload.get("avatar_b64", ""),
     )
 
     channel_saved = 0

@@ -89,6 +89,7 @@ def _direct_text_weight(item: dict) -> int:
     return (
         96
         + _utf8_len(item.get("text", ""))
+        + _utf8_len(item.get("media_kind", ""))
         + _utf8_len(item.get("reply_author", ""))
         + _utf8_len(item.get("reply_text", ""))
         + _utf8_len(item.get("forward_source", ""))
@@ -292,6 +293,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                     published_at = item.get('published_at', '')
                     text = item.get('text', '')
                     has_media = bool(item.get('has_media'))
+                    media_kind = item.get('media_kind', '') or ''
                     reply_to_message_id = item.get('reply_to_message_id')
                     reply_author = item.get('reply_author', '') or ''
                     reply_text = item.get('reply_text', '') or ''
@@ -307,6 +309,9 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                             changed = True
                         if bool(existing.has_media) != has_media:
                             existing.has_media = has_media
+                            changed = True
+                        if existing.media_kind != media_kind:
+                            existing.media_kind = media_kind
                             changed = True
                         if existing.reply_to_message_id != reply_to_message_id:
                             existing.reply_to_message_id = reply_to_message_id
@@ -328,6 +333,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                                 published_at=published_at,
                                 text=text,
                                 has_media=has_media,
+                                media_kind=media_kind,
                                 photo_mime="",
                                 photo_b64="",
                                 reply_to_message_id=reply_to_message_id,
@@ -402,6 +408,10 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                         if not bool(existing.has_media):
                             existing.has_media = True
                             changed = True
+                        media_kind = item.get('media_kind', '') or ''
+                        if media_kind and existing.media_kind != media_kind:
+                            existing.media_kind = media_kind
+                            changed = True
                     else:
                         db.add(
                             Message(
@@ -410,6 +420,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                                 published_at=item.get('published_at', ''),
                                 text=item.get('text', ''),
                                 has_media=True,
+                                media_kind=item.get('media_kind', '') or ('photo' if photo_b64 else ''),
                                 photo_mime=photo_mime,
                                 photo_b64=photo_b64,
                                 reply_to_message_id=item.get('reply_to_message_id'),

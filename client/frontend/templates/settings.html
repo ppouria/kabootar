@@ -5,7 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title data-i18n="settings.page_title">Settings - Kabootar</title>
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
-  <link rel="stylesheet" href="/static/style.css?v=20260326f" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#081018" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Kabootar" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <link rel="stylesheet" href="/static/style.css?v=20260328d" />
   <link rel="stylesheet" href="/static/settings.css?v=20260327a" />
 </head>
 <body class="settings-page">
@@ -20,7 +27,9 @@
       </div>
       <div class="settings-header-actions">
         <button class="back-link" type="button" id="langToggle" data-i18n-title="common.change_language" title="Change language">FA</button>
+        {% if not settings_locked %}
         <a href="/debug" class="back-link">Debug</a>
+        {% endif %}
         <a href="/" class="back-link" data-i18n="common.back">Back</a>
       </div>
     </header>
@@ -123,6 +132,23 @@
           </div>
 
           <div class="field">
+            <label class="label" for="dnsTimeoutSeconds" data-i18n="settings.dns_timeout">DNS timeout (seconds)</label>
+            <input
+              id="dnsTimeoutSeconds"
+              class="input"
+              type="number"
+              min="1"
+              max="30"
+              step="1"
+              name="dns_timeout_seconds"
+              value="{{ settings.dns_timeout_seconds }}"
+              inputmode="numeric"
+              data-i18n-placeholder="settings.placeholder.seconds"
+              placeholder="3"
+            />
+          </div>
+
+          <div class="field">
             <label class="label" data-i18n="settings.domains">Domains</label>
             <div id="dnsDomainsList" class="list-box"></div>
             <button type="button" class="btn-secondary" id="addDnsDomain" data-i18n="settings.add_domain">+ Add domain</button>
@@ -143,6 +169,65 @@
         <button class="btn-primary" type="submit" data-i18n="settings.save_settings">Save settings</button>
       </div>
     </form>
+
+    <section class="panel security-panel">
+      <div class="panel-head">
+        <div class="panel-title" data-i18n="settings.app_security_title">App password</div>
+        <div class="panel-sub" data-i18n="settings.app_security_sub">Lock the whole app and keep each unlock valid only for a limited time.</div>
+      </div>
+      <div class="security-state">
+        <span class="security-chip {% if app_password_enabled %}enabled{% else %}disabled{% endif %}">
+          {% if app_password_enabled %}
+          <span data-i18n="settings.password_enabled">Password enabled</span>
+          {% else %}
+          <span data-i18n="settings.password_disabled">Password is not set</span>
+          {% endif %}
+        </span>
+      </div>
+      <form method="post" action="/app/password" class="security-form" novalidate>
+        {% if app_password_enabled %}
+        <div class="field">
+          <label class="label" for="currentAppPassword" data-i18n="settings.current_password">Current password</label>
+          <input id="currentAppPassword" class="input" type="password" name="current_password" autocomplete="current-password" data-i18n-placeholder="settings.placeholder.password" placeholder="password" />
+        </div>
+        {% endif %}
+        <div class="field">
+          <label class="label" for="newAppPassword" data-i18n="settings.new_password">New password</label>
+          <input id="newAppPassword" class="input" type="password" name="new_password" autocomplete="new-password" data-i18n-placeholder="settings.placeholder.new_password" placeholder="new password" />
+        </div>
+        <div class="field">
+          <label class="label" for="confirmAppPassword" data-i18n="settings.confirm_password">Confirm password</label>
+          <input id="confirmAppPassword" class="input" type="password" name="confirm_password" autocomplete="new-password" data-i18n-placeholder="settings.placeholder.confirm_password" placeholder="confirm password" />
+        </div>
+        <div class="field">
+          <label class="label" for="appAuthTtlDays" data-i18n="settings.app_auth_ttl_days">Remember unlock (days)</label>
+          <input
+            id="appAuthTtlDays"
+            class="input"
+            type="number"
+            min="1"
+            max="365"
+            name="ttl_days"
+            value="{{ app_auth_ttl_days }}"
+            inputmode="numeric"
+            data-i18n-placeholder="settings.placeholder.ttl_days"
+            placeholder="7"
+          />
+          <div class="sub" data-i18n="settings.app_auth_ttl_hint">For example 7 for one week or 30 for one month.</div>
+        </div>
+        <div class="security-actions">
+          <button class="btn-primary" type="submit" data-i18n="settings.save_password">Save password</button>
+          {% if app_password_enabled %}
+          <button class="btn-secondary" type="submit" name="remove_password" value="1" data-i18n="settings.remove_password">Remove password</button>
+          {% endif %}
+        </div>
+      </form>
+      {% if app_password_enabled %}
+      <form method="post" action="/app/lock" class="security-lock-form">
+        <button class="btn-secondary" type="submit" data-i18n="settings.app_lock_button">Lock app now</button>
+      </form>
+      {% endif %}
+    </section>
 
     <section class="panel security-panel">
       <div class="panel-head">
@@ -199,6 +284,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/static/settings.js?v=20260327a"></script>
+  <script type="module" src="/static/settings.js?v=20260328b"></script>
 </body>
 </html>

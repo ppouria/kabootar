@@ -61,10 +61,20 @@ def _media_bundle_target_bytes() -> int:
     return max(4000, min(180000, value))
 
 
+def _avatar_max_bytes() -> int:
+    raw = (__import__("os").getenv("DNS_AVATAR_MAX_BYTES", "60000") or "60000").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 60000
+    return max(4000, min(120000, value))
+
+
 def _text_message_weight(message: dict) -> int:
     return (
         96
         + _utf8_len(message.get("text", ""))
+        + _utf8_len(message.get("media_kind", ""))
         + _utf8_len(message.get("reply_author", ""))
         + _utf8_len(message.get("reply_text", ""))
         + _utf8_len(message.get("forward_source", ""))
@@ -117,6 +127,8 @@ def _bundle_records(
     records: list[dict],
     target_bytes: int,
     weight_fn,
+    *,
+    first_payload_overrides: dict[str, str] | None = None,
 ) -> list[PackedBundle]:
     if not records:
         return []
@@ -124,18 +136,29 @@ def _bundle_records(
     bundles: list[PackedBundle] = []
     current: list[dict] = []
     current_weight = 0
+    first_bundle = True
+
+    def _flush_current() -> None:
+        nonlocal current, current_weight, first_bundle
+        payload = {**base_payload, "messages": current}
+        if first_bundle and first_payload_overrides:
+            for key, value in first_payload_overrides.items():
+                if value:
+                    payload[key] = value
+        bundles.append(_pack_bundle(payload, len(current)))
+        current = []
+        current_weight = 0
+        first_bundle = False
 
     for record in records:
         weight = max(1, int(weight_fn(record)))
         if current and current_weight + weight > target_bytes:
-            bundles.append(_pack_bundle({**base_payload, "messages": current}, len(current)))
-            current = []
-            current_weight = 0
+            _flush_current()
         current.append(record)
         current_weight += weight
 
     if current:
-        bundles.append(_pack_bundle({**base_payload, "messages": current}, len(current)))
+        _flush_current()
     return bundles
 
 
@@ -172,6 +195,7 @@ class BridgeCache:
         self.lock = threading.Lock()
         self.channels_override: list[str] = []
         self.payloads: dict[int, ChannelPayload] = {}
+        self.avatar_cache: dict[str, tuple[str, str]] = {}
         self.version: str = "0"
         self.count: int = 0
 
@@ -229,7 +253,10 @@ class BridgeCache:
 
         now = int(time.time())
         max_photo_bytes = int(__import__("os").getenv("DNS_MEDIA_MAX_BYTES", "180000"))
+        max_avatar_bytes = _avatar_max_bytes()
         media_cache: dict[str, tuple[str, str]] = {}
+        avatar_cache_prev = dict(self.avatar_cache)
+        avatar_cache_next: dict[str, tuple[str, str]] = {}
         payloads_new: dict[int, ChannelPayload] = {}
 
         for url in channels:
@@ -274,6 +301,7 @@ class BridgeCache:
                         "published_at": m.get("published_at", ""),
                         "text": m.get("text", ""),
                         "has_media": bool(m.get("has_media")),
+                        "media_kind": m.get("media_kind", "") or "",
                         "photo_mime": photo_mime,
                         "photo_b64": photo_b64,
                         "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
@@ -284,12 +312,37 @@ class BridgeCache:
                 )
 
             username = url.rsplit("/", 1)[-1]
+            avatar_url = (meta.get("avatar_url", "") or "").strip()
+            avatar_mime = ""
+            avatar_b64 = ""
+            if avatar_url:
+                cached_avatar = avatar_cache_prev.get(avatar_url)
+                if cached_avatar:
+                    avatar_mime, avatar_b64 = cached_avatar
+                else:
+                    try:
+                        fetched_avatar = fetch_photo_base64_with_proxies(
+                            avatar_url,
+                            proxies,
+                            attempts=2,
+                            timeout_seconds=20,
+                            retry_delay_seconds=5,
+                            max_bytes=max_avatar_bytes,
+                        )
+                    except Exception:
+                        fetched_avatar = None
+                    if fetched_avatar:
+                        avatar_mime, avatar_b64 = fetched_avatar
+                if avatar_b64:
+                    avatar_cache_next[avatar_url] = (avatar_mime, avatar_b64)
+
             text_records = [
                 {
                     "message_id": int(m.get("message_id") or 0),
                     "published_at": m.get("published_at", ""),
                     "text": m.get("text", ""),
                     "has_media": bool(m.get("has_media")),
+                    "media_kind": m.get("media_kind", "") or "",
                     "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
                     "reply_author": m.get("reply_author", "") or "",
                     "reply_text": m.get("reply_text", "") or "",
@@ -303,6 +356,7 @@ class BridgeCache:
                 {
                     "message_id": int(m.get("message_id") or 0),
                     "has_media": bool(m.get("has_media")),
+                    "media_kind": m.get("media_kind", "") or "",
                     "photo_mime": m.get("photo_mime", "") or "",
                     "photo_b64": m.get("photo_b64", "") or "",
                 }
@@ -316,14 +370,23 @@ class BridgeCache:
                 "source_url": url,
                 "username": username,
                 "title": meta.get("title", ""),
-                "avatar_url": meta.get("avatar_url", ""),
+                "avatar_url": avatar_url,
             }
             media_base = {
                 "stage": "media",
                 "source_url": url,
                 "username": username,
             }
-            text_bundles = _bundle_records(text_base, text_records, _text_bundle_target_bytes(), _text_message_weight)
+            text_bundles = _bundle_records(
+                text_base,
+                text_records,
+                _text_bundle_target_bytes(),
+                _text_message_weight,
+                first_payload_overrides={
+                    "avatar_mime": avatar_mime,
+                    "avatar_b64": avatar_b64,
+                },
+            )
             media_bundles = _bundle_records(media_base, media_records, _media_bundle_target_bytes(), _media_message_weight)
             payloads_new[len(payloads_new) + 1] = ChannelPayload(
                 text_bundles=text_bundles,
@@ -336,6 +399,7 @@ class BridgeCache:
 
         with self.lock:
             self.payloads = payloads_new
+            self.avatar_cache = avatar_cache_next
             self.version = str(now)
             self.count = len(payloads_new)
 

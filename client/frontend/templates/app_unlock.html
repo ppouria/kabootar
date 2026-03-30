@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="{{ 'fa' if unlock_copy.back_label == 'بازگشت' else 'en' }}" dir="{{ 'rtl' if unlock_copy.back_label == 'بازگشت' else 'ltr' }}">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_meta.app_name }}</title>
+  <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <meta name="theme-color" content="#081018" />
+  <link rel="stylesheet" href="/static/style.css?v=20260328d" />
+  <style>
+    body{overflow:auto}
+    .app-auth-shell{min-height:100dvh;display:flex;align-items:center;justify-content:center;padding:18px}
+    .app-auth-card{width:min(460px,100%);background:linear-gradient(180deg,#132130 0%,#0f1a27 100%);border:1px solid #274157;border-radius:18px;padding:20px;box-shadow:0 18px 50px rgba(0,0,0,.32)}
+    .app-auth-brand{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+    .app-auth-logo{width:44px;height:44px;display:block;border-radius:50%}
+    .app-auth-title{margin:0;font-size:28px;line-height:1.1}
+    .app-auth-sub{margin:8px 0 0;color:#98adbf}
+    .app-auth-version{margin:0 0 14px;color:#98adbf;font-size:12px}
+    .app-auth-form{display:flex;flex-direction:column;gap:12px}
+    .app-auth-label{font-weight:700}
+    .app-auth-input{width:100%;background:#0a1824;color:#eaf2f9;border:1px solid #29445b;border-radius:12px;padding:11px 12px;outline:none}
+    .app-auth-input:focus{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.18)}
+    .app-auth-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+    .app-auth-msg{margin-bottom:12px;border:1px solid rgba(46,167,255,.55);background:rgba(46,167,255,.14);color:#d4ebff;border-radius:12px;padding:8px 10px}
+    .app-auth-back{color:#98adbf;text-decoration:none}
+  </style>
+</head>
+<body>
+  <div class="app-auth-shell">
+    <div class="app-auth-card">
+      <div class="app-auth-brand">
+        <img class="app-auth-logo" src="/static/kabootar.svg" alt="{{ app_meta.app_name }}" />
+        <div>
+          <h1 class="app-auth-title">{{ unlock_copy.title }}</h1>
+          <p class="app-auth-sub">{{ unlock_copy.subtitle }}</p>
+        </div>
+      </div>
+      <p class="app-auth-version">{{ app_meta.display_version }}</p>
+      {% if message %}<div class="app-auth-msg">{{ message }}</div>{% endif %}
+      <form class="app-auth-form" method="post" action="/app/unlock" novalidate>
+        <input type="hidden" name="next" value="{{ next_path }}" />
+        <div>
+          <label class="app-auth-label" for="appUnlockPassword">{{ unlock_copy.password_label }}</label>
+          <input id="appUnlockPassword" class="app-auth-input" type="password" name="password" autocomplete="current-password" autofocus />
+        </div>
+        <div class="app-auth-actions">
+          <button class="lite-btn active" type="submit">{{ unlock_copy.unlock_button }}</button>
+          <a class="app-auth-back" href="/">{{ unlock_copy.back_label }}</a>
+        </div>
+      </form>
+    </div>
+  </div>
+</body>
+</html>

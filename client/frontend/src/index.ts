@@ -22,12 +22,23 @@ type SyncJobState = {
   refresh_result?: Record<string, unknown> | null;
 };
 
+type AutoRefreshState = {
+  at: number;
+  selected: string;
+  messageScrollTop: number;
+  stickToBottom: boolean;
+};
+
 class MirrorApp {
   private selected: string;
+  private readonly AUTO_REFRESH_MS = 30000;
   private readonly STORAGE_KEY = 'kabootar_read_v1';
   private readonly LANG_KEY = 'kabootar_lang';
+  private readonly INSTALL_PROMPT_KEY = 'kabootar_install_prompt_dismissed_v1';
+  private readonly AUTO_REFRESH_STATE_KEY = 'kabootar_auto_refresh_state_v1';
   private readonly sourceMode: 'dns' | 'direct';
   private readonly dnsDomainsCount: number;
+  private autoRefreshTimer: number | null = null;
   private refreshSidebarSearch: (() => void) | null = null;
   private lang: 'fa' | 'en' = 'fa';
   private i18n: Record<string, string> = {};
@@ -111,6 +122,14 @@ class MirrorApp {
     btn.textContent = this.lang === 'fa' ? 'EN' : 'FA';
   }
 
+  private applyUnsupportedMediaLabels(root: ParentNode = document): void {
+    root.querySelectorAll<HTMLElement>('.unsupported-media-copy[data-media-kind]').forEach((el) => {
+      const kind = (el.dataset.mediaKind || 'media').trim().toLowerCase() || 'media';
+      const key = `index.unsupported_media_${kind}`;
+      el.textContent = this.t(key, this.t('index.unsupported_media_media', 'This message contains unsupported media and Kabootar does not support it yet.'));
+    });
+  }
+
   private async initI18n(): Promise<void> {
     const saved = (localStorage.getItem(this.LANG_KEY) || '').toLowerCase();
     this.lang = saved === 'en' ? 'en' : 'fa';
@@ -124,6 +143,7 @@ class MirrorApp {
     document.documentElement.lang = this.lang;
     document.documentElement.dir = this.lang === 'fa' ? 'rtl' : 'ltr';
     this.applyI18n();
+    this.applyUnsupportedMediaLabels();
     this.updateLangToggleLabel();
 
     const btn = document.getElementById('langToggle');
@@ -286,12 +306,17 @@ class MirrorApp {
     const overlay = document.getElementById('sidebarOverlay');
     if (!btn || !sidebar || !overlay) return;
 
+    const shouldAutoOpen = (): boolean => {
+      const hasChannels = document.querySelectorAll('#sidebar .channel').length > 0;
+      return !this.selected && hasChannels && window.matchMedia('(max-width: 900px)').matches;
+    };
+
     const setOpen = (open: boolean) => {
       sidebar.classList.toggle('open', open);
       overlay.hidden = !open;
     };
 
-    setOpen(false);
+    setOpen(shouldAutoOpen());
 
     btn.addEventListener('click', (e) => {
       e.preventDefault();
@@ -305,7 +330,7 @@ class MirrorApp {
       ch.addEventListener('click', () => setOpen(false), { capture: true });
     });
 
-    window.addEventListener('pageshow', () => setOpen(false));
+    window.addEventListener('pageshow', () => setOpen(shouldAutoOpen()));
   }
 
   private setupSidebarSearch(): void {
@@ -1032,9 +1057,198 @@ class MirrorApp {
     navigator.serviceWorker.register('/sw.js').catch(() => undefined);
   }
 
+  private setupInstallPrompt(): void {
+    const prompt = document.getElementById('installPrompt') as HTMLElement | null;
+    const title = document.getElementById('installPromptTitle') as HTMLElement | null;
+    const text = document.getElementById('installPromptText') as HTMLElement | null;
+    const action = document.getElementById('installPromptAction') as HTMLButtonElement | null;
+    const dismiss = document.getElementById('installPromptDismiss') as HTMLButtonElement | null;
+    if (!prompt || !title || !text || !action || !dismiss) return;
+
+    const nav = navigator as Navigator & { standalone?: boolean };
+    const ua = (nav.userAgent || '').toLowerCase();
+    const isIOS = /iphone|ipad|ipod/.test(ua);
+    const isAndroid = /android/.test(ua);
+    const isSafari = /safari/.test(ua) && !/crios|fxios|edgios|opr\//.test(ua);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || nav.standalone === true;
+    const isMobileViewport = window.matchMedia('(max-width: 900px)').matches;
+
+    let deferredPrompt: {
+      prompt: () => Promise<void>;
+      userChoice?: Promise<{ outcome?: string }>;
+    } | null = null;
+
+    const hiddenByUser = () => localStorage.getItem(this.INSTALL_PROMPT_KEY) === '1';
+
+    const hidePrompt = (persist = false) => {
+      prompt.hidden = true;
+      if (persist) localStorage.setItem(this.INSTALL_PROMPT_KEY, '1');
+    };
+
+    const showPrompt = (mode: 'android' | 'ios') => {
+      if (isStandalone || hiddenByUser() || !isMobileViewport) return;
+      title.textContent = this.t('index.install_prompt_title', 'Add Kabootar to your home screen');
+      if (mode === 'android') {
+        text.textContent = this.t('index.install_prompt_android', 'Install this web app for faster access and a full-screen experience.');
+        action.hidden = false;
+        action.textContent = this.t('index.install_prompt_action', 'Add to Home');
+      } else {
+        text.textContent = this.t('index.install_prompt_ios', 'Use Safari Share and then tap Add to Home Screen.');
+        action.hidden = true;
+      }
+      prompt.hidden = false;
+    };
+
+    dismiss.addEventListener('click', () => hidePrompt(true));
+    action.addEventListener('click', async () => {
+      if (!deferredPrompt) {
+        hidePrompt(true);
+        return;
+      }
+      try {
+        await deferredPrompt.prompt();
+        if (deferredPrompt.userChoice) await deferredPrompt.userChoice;
+        hidePrompt(true);
+      } catch {
+        hidePrompt(false);
+      } finally {
+        deferredPrompt = null;
+      }
+    });
+
+    window.addEventListener('appinstalled', () => hidePrompt(true));
+
+    window.addEventListener('beforeinstallprompt', (event) => {
+      event.preventDefault();
+      deferredPrompt = event as unknown as typeof deferredPrompt;
+      if (isAndroid) showPrompt('android');
+    });
+
+    if (isIOS && isSafari && !isStandalone && !hiddenByUser()) {
+      window.setTimeout(() => showPrompt('ios'), 1200);
+    }
+  }
+
+  private loadAutoRefreshState(): AutoRefreshState | null {
+    try {
+      const raw = sessionStorage.getItem(this.AUTO_REFRESH_STATE_KEY);
+      if (!raw) return null;
+      sessionStorage.removeItem(this.AUTO_REFRESH_STATE_KEY);
+      const parsed = JSON.parse(raw) as Partial<AutoRefreshState> | null;
+      const at = Number(parsed?.at || 0);
+      if (!at || Date.now() - at > this.AUTO_REFRESH_MS * 3) return null;
+      return {
+        at,
+        selected: typeof parsed?.selected === 'string' ? parsed.selected : '',
+        messageScrollTop: Math.max(0, Number(parsed?.messageScrollTop || 0) || 0),
+        stickToBottom: parsed?.stickToBottom === true,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private persistAutoRefreshState(): void {
+    try {
+      const wrap = document.getElementById('messages') as HTMLElement | null;
+      const state: AutoRefreshState = {
+        at: Date.now(),
+        selected: this.selected,
+        messageScrollTop: Math.max(0, Number(wrap?.scrollTop || 0) || 0),
+        stickToBottom: !!wrap && (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40),
+      };
+      sessionStorage.setItem(this.AUTO_REFRESH_STATE_KEY, JSON.stringify(state));
+    } catch {
+      // Ignore storage errors and still allow the refresh.
+    }
+  }
+
+  private restoreAfterAutoRefresh(state: AutoRefreshState | null, fallbackDivider: HTMLElement | null): void {
+    if (!state || state.selected !== this.selected) {
+      this.scrollToUnreadOrBottom(fallbackDivider);
+      return;
+    }
+
+    const wrap = document.getElementById('messages') as HTMLElement | null;
+    if (!wrap) {
+      this.scrollToUnreadOrBottom(fallbackDivider);
+      return;
+    }
+
+    const apply = () => {
+      if (state.stickToBottom) {
+        wrap.scrollTop = wrap.scrollHeight;
+        return;
+      }
+      const maxScroll = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+      wrap.scrollTop = Math.min(state.messageScrollTop, maxScroll);
+    };
+
+    apply();
+    requestAnimationFrame(apply);
+    window.setTimeout(apply, 120);
+  }
+
+  private hasBlockingModalOpen(): boolean {
+    return ['addModal', 'addDomainModal', 'syncModal', 'imageViewer'].some((id) => {
+      const el = document.getElementById(id) as HTMLElement | null;
+      return !!el && !el.hidden;
+    });
+  }
+
+  private hasActiveInputFocus(): boolean {
+    const active = document.activeElement as HTMLElement | null;
+    if (!active) return false;
+    if (active.isContentEditable) return true;
+    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
+  }
+
+  private hasActiveSearchQuery(): boolean {
+    const channelSearch = (document.getElementById('channelSearchInput') as HTMLInputElement | null)?.value?.trim() || '';
+    const messageSearch = (document.getElementById('messageSearchInput') as HTMLInputElement | null)?.value?.trim() || '';
+    return !!channelSearch || !!messageSearch;
+  }
+
+  private canAutoRefresh(): boolean {
+    if (document.visibilityState !== 'visible') return false;
+    if (this.hasBlockingModalOpen()) return false;
+    if (this.hasActiveInputFocus()) return false;
+    if (this.hasActiveSearchQuery()) return false;
+    return true;
+  }
+
+  private scheduleAutoRefresh(delay = this.AUTO_REFRESH_MS): void {
+    if (this.autoRefreshTimer != null) {
+      window.clearTimeout(this.autoRefreshTimer);
+    }
+    this.autoRefreshTimer = window.setTimeout(() => {
+      if (!this.canAutoRefresh()) {
+        this.scheduleAutoRefresh();
+        return;
+      }
+      this.persistAutoRefreshState();
+      window.location.reload();
+    }, delay);
+  }
+
+  private setupAutoRefresh(): void {
+    this.scheduleAutoRefresh();
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        this.scheduleAutoRefresh();
+      }
+    });
+
+    window.addEventListener('focus', () => {
+      this.scheduleAutoRefresh();
+    });
+  }
+
   public async mount(): Promise<void> {
     await this.initI18n();
 
+    const autoRefreshState = this.loadAutoRefreshState();
     const readMap = this.loadReadMap();
     this.setupLiteMode();
     this.applyTimes();
@@ -1048,8 +1262,10 @@ class MirrorApp {
     this.setupAddChannelBox();
     this.setupSyncDialog();
     this.setupImageViewer();
+    this.setupInstallPrompt();
     this.registerSW();
-    setTimeout(() => this.scrollToUnreadOrBottom(divider), 30);
+    this.setupAutoRefresh();
+    window.setTimeout(() => this.restoreAfterAutoRefresh(autoRefreshState, divider), 30);
 
     if (this.selected) {
       const maybeMarkRead = () => {
