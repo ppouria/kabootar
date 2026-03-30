@@ -31,7 +31,14 @@ from app.scraper import (
 )
 from app.settings_store import get_setting, set_setting
 from app.text_packer import pack_text, unpack_text
-from app.utils import normalize_tg_s_url, parse_csv
+from app.utils import (
+    deserialize_photo_items,
+    normalize_photo_items,
+    normalize_tg_s_url,
+    parse_csv,
+    primary_photo_fields,
+    serialize_photo_items,
+)
 
 logger = logging.getLogger("kabootar.dns")
 ProgressCallback = Optional[Callable[[dict], None]]
@@ -85,7 +92,8 @@ def _text_message_weight(message: dict) -> int:
 
 
 def _media_message_weight(message: dict) -> int:
-    return 64 + len((message.get("photo_b64", "") or "")) + _utf8_len(message.get("photo_mime", ""))
+    photos_json = (message.get("photos_json", "") or "").strip()
+    return 64 + len(photos_json or (message.get("photo_b64", "") or "")) + _utf8_len(message.get("photo_mime", ""))
 
 
 def _apply_batch_size(name: str, default: int, lower: int, upper: int) -> int:
@@ -105,16 +113,51 @@ def _media_apply_batch_size() -> int:
     return _apply_batch_size("DNS_MEDIA_APPLY_BATCH_SIZE", 2, 1, 10)
 
 
-def _normalize_photo_payload(photo_b64: str, photo_mime: str) -> tuple[str, str]:
-    payload = (photo_b64 or "").strip()
-    mime = (photo_mime or "").strip()
-    if not payload:
-        return "", ""
-    try:
-        photo_bytes = base64.b64decode(payload, validate=True)
-        return base64.b64encode(photo_bytes).decode("ascii"), mime
-    except Exception:
-        return "", ""
+def _normalize_photo_payload(message: dict) -> tuple[str, str, str]:
+    photo_items = deserialize_photo_items(
+        message.get("photos_json", "") or "",
+        fallback_mime=message.get("photo_mime", "") or "",
+        fallback_b64=message.get("photo_b64", "") or "",
+    )
+    photos_json = serialize_photo_items(photo_items)
+    photo_mime, photo_b64 = primary_photo_fields(photo_items)
+    return photos_json, photo_mime, photo_b64
+
+
+def _fetch_photo_items(
+    photo_urls: list[str],
+    proxies: list[str],
+    media_cache: dict[str, tuple[str, str]],
+    *,
+    timeout_seconds: int,
+    max_photo_bytes: int,
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for photo_url in photo_urls:
+        if not photo_url:
+            continue
+        photo_mime = ""
+        photo_b64 = ""
+        if photo_url in media_cache:
+            photo_mime, photo_b64 = media_cache[photo_url]
+        else:
+            try:
+                fetched = fetch_photo_base64_with_proxies(
+                    photo_url,
+                    proxies,
+                    attempts=2,
+                    timeout_seconds=timeout_seconds,
+                    retry_delay_seconds=5,
+                    max_bytes=max_photo_bytes,
+                )
+            except Exception:
+                fetched = None
+            if fetched:
+                photo_mime, photo_b64 = fetched
+            media_cache[photo_url] = (photo_mime, photo_b64)
+        if photo_b64:
+            items.append({"mime": photo_mime, "b64": photo_b64})
+    return normalize_photo_items(items)
 
 
 def _normalize_avatar_payload(avatar_b64: str, avatar_mime: str) -> tuple[str, str]:
@@ -249,7 +292,7 @@ def _upsert_media_message(db, channel_id: int, message: dict) -> bool:
     if msg_id <= 0:
         return False
 
-    photo_b64, photo_mime = _normalize_photo_payload(message.get("photo_b64", "") or "", message.get("photo_mime", "") or "")
+    photos_json, photo_mime, photo_b64 = _normalize_photo_payload(message)
     has_media = bool(message.get("has_media")) or bool(photo_b64)
     media_kind = message.get("media_kind", "") or ("photo" if photo_b64 else "")
 
@@ -268,6 +311,9 @@ def _upsert_media_message(db, channel_id: int, message: dict) -> bool:
         if existing.photo_b64 != photo_b64:
             existing.photo_b64 = photo_b64
             changed = True
+        if getattr(existing, "photos_json", "") != photos_json:
+            existing.photos_json = photos_json
+            changed = True
         return changed
 
     db.add(
@@ -280,6 +326,7 @@ def _upsert_media_message(db, channel_id: int, message: dict) -> bool:
             media_kind=media_kind,
             photo_mime=photo_mime,
             photo_b64=photo_b64,
+            photos_json=photos_json,
             reply_to_message_id=None,
             reply_author="",
             reply_text="",
@@ -340,36 +387,28 @@ class BridgeCache:
             for m in items:
                 if int(m.get("message_id") or 0) <= 0:
                     continue
-                photo_mime = ""
-                photo_b64 = ""
-                photo_url = (m.get("photo_url") or "").strip()
-                if photo_url:
-                    if photo_url in media_cache:
-                        photo_mime, photo_b64 = media_cache[photo_url]
-                    else:
-                        try:
-                            fetched = fetch_photo_base64_with_proxies(
-                                photo_url,
-                                proxies,
-                                attempts=2,
-                                timeout_seconds=20,
-                                retry_delay_seconds=5,
-                                max_bytes=max_photo_bytes,
-                            )
-                        except Exception:
-                            fetched = None
-                        if fetched:
-                            photo_mime, photo_b64 = fetched
-                        media_cache[photo_url] = (photo_mime, photo_b64)
+                photo_urls = [str(url).strip() for url in (m.get("photo_urls") or []) if str(url).strip()]
+                if not photo_urls and str(m.get("photo_url") or "").strip():
+                    photo_urls = [str(m.get("photo_url") or "").strip()]
+                photo_items = _fetch_photo_items(
+                    photo_urls,
+                    proxies,
+                    media_cache,
+                    timeout_seconds=20,
+                    max_photo_bytes=max_photo_bytes,
+                )
+                photo_mime, photo_b64 = primary_photo_fields(photo_items)
+                photos_json = serialize_photo_items(photo_items)
                 messages_payload.append(
                     {
                         "message_id": int(m.get("message_id") or 0),
                         "published_at": m.get("published_at", ""),
                         "text": m.get("text", ""),
-                        "has_media": bool(m.get("has_media")),
-                        "media_kind": m.get("media_kind", "") or "",
+                        "has_media": bool(m.get("has_media")) or bool(photo_b64),
+                        "media_kind": m.get("media_kind", "") or ("photo" if photo_b64 else ""),
                         "photo_mime": photo_mime,
                         "photo_b64": photo_b64,
+                        "photos_json": photos_json,
                         "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
                         "reply_author": m.get("reply_author", "") or "",
                         "reply_text": m.get("reply_text", "") or "",
@@ -1734,9 +1773,10 @@ def _sync_legacy_channel(
                 "media_kind": m.get("media_kind", "") or "",
                 "photo_mime": m.get("photo_mime", "") or "",
                 "photo_b64": m.get("photo_b64", "") or "",
+                "photos_json": m.get("photos_json", "") or "",
             }
             for m in raw_messages
-            if (m.get("photo_b64", "") or "").strip()
+            if str(m.get("photos_json", "") or "").strip() or str(m.get("photo_b64", "") or "").strip()
         ],
         key=lambda item: (_media_message_weight(item), int(item.get("message_id") or 0)),
     )

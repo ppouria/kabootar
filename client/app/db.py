@@ -44,6 +44,8 @@ def ensure_schema() -> None:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN photo_mime VARCHAR(64) NOT NULL DEFAULT ''"))
             if "photo_b64" not in msg_cols:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN photo_b64 TEXT NOT NULL DEFAULT ''"))
+            if "photos_json" not in msg_cols:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN photos_json TEXT NOT NULL DEFAULT ''"))
             if "reply_to_message_id" not in msg_cols:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER"))
             if "reply_author" not in msg_cols:

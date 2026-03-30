@@ -28,17 +28,37 @@ if errorlevel 1 (
 
 cd android
 
+if defined KABOOTAR_BUILD_PYTHON (
+  call "!KABOOTAR_BUILD_PYTHON!" -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1)" >nul 2>nul
+  if errorlevel 1 (
+    echo ERROR: KABOOTAR_BUILD_PYTHON must point to a Python 3.13 executable.
+    exit /b 1
+  )
+) else (
+  for /f "delims=" %%P in ('py -3.13 -c "import sys; print(sys.executable)" 2^>nul') do set "KABOOTAR_BUILD_PYTHON=%%P"
+  if not defined KABOOTAR_BUILD_PYTHON (
+    for /f "delims=" %%P in ('python -c "import sys; sys.exit(0 if sys.version_info[:2] == (3, 13) else 1); print(sys.executable)" 2^>nul') do set "KABOOTAR_BUILD_PYTHON=%%P"
+  )
+)
+if not defined KABOOTAR_BUILD_PYTHON (
+  echo ERROR: Python 3.13 is required for Android builds because Chaquopy is configured for Python 3.13.
+  echo Install Python 3.13 and make sure ^`py -3.13^` works, or set KABOOTAR_BUILD_PYTHON to a Python 3.13 executable.
+  exit /b 1
+)
+
 set "RUN_GRADLE="
 set "JDK_CACHE=%USERPROFILE%\.cache\kabootar\jdk-17"
 set "JDK_ZIP=%JDK_CACHE%\temurin-jdk-17.zip"
 set "JDK_HOME="
+set "PF64=%ProgramW6432%"
+if not defined PF64 set "PF64=%ProgramFiles%"
 if defined JAVA_HOME (
   if exist "%JAVA_HOME%\bin\java.exe" (
     set "JDK_HOME=%JAVA_HOME%"
     goto :jdk_ready
   )
 )
-for /d %%D in ("%ProgramFiles%\Eclipse Adoptium\jdk-17*" "%ProgramFiles%\Java\jdk-17*" "%ProgramFiles%\Microsoft\jdk-17*" "%ProgramFiles%\Zulu\zulu-17*") do (
+for /d %%D in ("%PF64%\Eclipse Adoptium\jdk-17*" "%PF64%\Java\jdk-17*" "%PF64%\Microsoft\jdk-17*" "%PF64%\Zulu\zulu-17*" "%ProgramFiles%\Eclipse Adoptium\jdk-17*" "%ProgramFiles%\Java\jdk-17*" "%ProgramFiles%\Microsoft\jdk-17*" "%ProgramFiles%\Zulu\zulu-17*" "%ProgramFiles(x86)%\Eclipse Adoptium\jdk-17*" "%ProgramFiles(x86)%\Java\jdk-17*" "%ProgramFiles(x86)%\Microsoft\jdk-17*" "%ProgramFiles(x86)%\Zulu\zulu-17*") do (
   if exist "%%~fD\bin\java.exe" (
     set "JDK_HOME=%%~fD"
     goto :jdk_ready
@@ -57,7 +77,9 @@ if not defined JDK_HOME if exist "!JDK_ZIP!" (
     "$cache='!JDK_CACHE!';" ^
     "Get-ChildItem -Path $cache -Directory -Filter 'jdk-*' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;" ^
     "Expand-Archive -Path '!JDK_ZIP!' -DestinationPath $cache -Force"
-  if not errorlevel 1 (
+  if errorlevel 1 (
+    del /f /q "!JDK_ZIP!" >nul 2>nul
+  ) else (
     for /d %%D in ("!JDK_CACHE!\jdk-*") do (
       if exist "%%~fD\bin\java.exe" (
         set "JDK_HOME=%%~fD"
@@ -128,7 +150,6 @@ set "RELEASE_DIR=app\build\outputs\apk\release"
 set "UNIVERSAL_SOURCE=%RELEASE_DIR%\app-universal-release.apk"
 if not exist "%UNIVERSAL_SOURCE%" set "UNIVERSAL_SOURCE=%RELEASE_DIR%\app-release.apk"
 set "ARM64_SOURCE=%RELEASE_DIR%\app-arm64-v8a-release.apk"
-set "X86_SOURCE=%RELEASE_DIR%\app-x86-release.apk"
 set "X64_SOURCE=%RELEASE_DIR%\app-x86_64-release.apk"
 
 if not exist "%UNIVERSAL_SOURCE%" (
@@ -139,23 +160,19 @@ if not exist "%ARM64_SOURCE%" (
   echo ERROR: arm64-v8a release APK not found
   exit /b 1
 )
-if not exist "%X86_SOURCE%" (
-  echo ERROR: x86 release APK not found
-  exit /b 1
-)
 if not exist "%X64_SOURCE%" (
   echo ERROR: x86_64 release APK not found
   exit /b 1
 )
 copy /Y "%UNIVERSAL_SOURCE%" "%RELEASE_DIR%\kabootar-android-universal.apk" >nul
 copy /Y "%ARM64_SOURCE%" "%RELEASE_DIR%\kabootar-android-arm64-v8a.apk" >nul
-copy /Y "%X86_SOURCE%" "%RELEASE_DIR%\kabootar-android-x86.apk" >nul
 copy /Y "%X64_SOURCE%" "%RELEASE_DIR%\kabootar-android-x86_64.apk" >nul
 
 echo.
-echo Debug APK: app\build\outputs\apk\debug\app-debug.apk
+echo Debug universal APK: app\build\outputs\apk\debug\app-universal-debug.apk
+echo Debug ARM64 APK: app\build\outputs\apk\debug\app-arm64-v8a-debug.apk
+echo Debug x86_64 APK: app\build\outputs\apk\debug\app-x86_64-debug.apk
 echo Universal APK: %RELEASE_DIR%\kabootar-android-universal.apk
 echo ARM64 APK: %RELEASE_DIR%\kabootar-android-arm64-v8a.apk
-echo x86 APK: %RELEASE_DIR%\kabootar-android-x86.apk
 echo x86_64 APK: %RELEASE_DIR%\kabootar-android-x86_64.apk
 endlocal

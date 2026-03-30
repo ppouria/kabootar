@@ -27,6 +27,18 @@ def _extract_style_url(style: str) -> str:
     return out
 
 
+def _extract_photo_urls(block: str) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for style in re.findall(r'tgme_widget_message_photo_wrap[^>]*style="([^"]+)"', block, flags=re.I | re.S):
+        url = _extract_style_url(style)
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        out.append(url)
+    return out
+
+
 def _extract_element_html(html: str, class_token: str, tags: tuple[str, ...] = ("div",)) -> str:
     match = None
     match_tag = ""
@@ -197,10 +209,8 @@ def _parse_message_block(block: str) -> Optional[dict]:
     text_inner = _inner_html(text_html)
     media_kind = _extract_media_kind(block)
     has_media = bool(media_kind)
-    photo_url = ""
-    photo_style_match = re.search(r'tgme_widget_message_photo_wrap[^>]*style="([^"]+)"', block, flags=re.S)
-    if photo_style_match:
-        photo_url = _extract_style_url(photo_style_match.group(1))
+    photo_urls = _extract_photo_urls(block)
+    photo_url = photo_urls[0] if photo_urls else ""
 
     reply_to_message_id: int | None = None
     reply_author = ""
@@ -236,6 +246,7 @@ def _parse_message_block(block: str) -> Optional[dict]:
         "has_media": has_media,
         "media_kind": media_kind,
         "photo_url": photo_url,
+        "photo_urls": photo_urls,
         "reply_to_message_id": reply_to_message_id,
         "reply_author": reply_author,
         "reply_text": reply_text,

@@ -6,6 +6,7 @@ import sys
 
 from app.runtime_debug import record_event, setup_logging
 from app.versioning import app_meta
+from sqlalchemy import inspect, text
 
 
 def _run_alembic(*args: str) -> None:
@@ -14,11 +15,37 @@ def _run_alembic(*args: str) -> None:
     subprocess.check_call([sys.executable, "-m", "alembic", *args], env=env)
 
 
+def _bootstrap_legacy_alembic() -> None:
+    from app.config import settings
+    from app.db import engine, ensure_schema
+
+    if not settings.database_url.startswith("sqlite:///"):
+        return
+
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    legacy_tables = tables - {"alembic_version"}
+    if not legacy_tables:
+        return
+
+    version_rows = 0
+    if "alembic_version" in tables:
+        with engine.begin() as conn:
+            version_rows = int(conn.execute(text("SELECT COUNT(*) FROM alembic_version")).scalar() or 0)
+    if version_rows > 0:
+        return
+
+    ensure_schema()
+    _run_alembic("stamp", "head")
+
+
 def cmd_migrate():
+    _bootstrap_legacy_alembic()
     _run_alembic("upgrade", "head")
 
 
 def cmd_check_migrations():
+    _bootstrap_legacy_alembic()
     _run_alembic("check")
 
 

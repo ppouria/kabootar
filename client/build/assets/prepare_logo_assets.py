@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import base64
+import os
 import re
+import subprocess
+import tempfile
 from collections import deque
 from io import BytesIO
 from pathlib import Path
@@ -15,8 +18,9 @@ except Exception:
     svg2png = None
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCE_SVG = Path(__file__).resolve().with_name("kabootar.svg")
 FRONTEND_STATIC = ROOT / "client" / "frontend" / "static"
+SOURCE_SVG = FRONTEND_STATIC / "kabootar.svg"
+LEGACY_BUILD_SVG = Path(__file__).resolve().with_name("kabootar.svg")
 WINDOWS_ICON = ROOT / "client" / "build" / "windows" / "kabootar.ico"
 MACOS_ICON = ROOT / "client" / "build" / "macos" / "kabootar.icns"
 ANDROID_RES = ROOT / "client" / "android" / "app" / "src" / "main" / "res"
@@ -27,6 +31,12 @@ ANDROID_SIZES = {
     "mipmap-xxhdpi": 144,
     "mipmap-xxxhdpi": 192,
 }
+COMMON_BROWSER_PATHS = [
+    Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe"),
+    Path(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"),
+    Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+    Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+]
 
 
 def _read_svg() -> str:
@@ -54,11 +64,11 @@ def _clean_svg(svg_text: str) -> str:
     return cleaned
 
 
-def _save_web_svgs(svg_text: str) -> None:
+def _save_compatibility_svgs(svg_text: str) -> None:
     FRONTEND_STATIC.mkdir(parents=True, exist_ok=True)
-    (FRONTEND_STATIC / "kabootar.svg").write_text(svg_text, encoding="utf-8")
     # Keep compatibility with existing fallback path used in old builds.
     (FRONTEND_STATIC / "t_logo.svg").write_text(svg_text, encoding="utf-8")
+    LEGACY_BUILD_SVG.write_text(svg_text, encoding="utf-8")
 
 
 def _render_svg(svg_text: str, size: int = 1024) -> Image.Image:
@@ -71,6 +81,80 @@ def _render_svg(svg_text: str, size: int = 1024) -> Image.Image:
         background_color=None,
     )
     return Image.open(BytesIO(png_bytes)).convert("RGBA")
+
+
+def _find_headless_browser() -> Path | None:
+    override = (os.getenv("KABOOTAR_SVG_BROWSER") or "").strip()
+    if override:
+        candidate = Path(override)
+        if candidate.exists():
+            return candidate
+    for candidate in COMMON_BROWSER_PATHS:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _render_svg_via_browser(svg_text: str, size: int = 1024) -> Image.Image:
+    browser = _find_headless_browser()
+    if browser is None:
+        raise RuntimeError("headless browser renderer is unavailable")
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    html, body {{
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: transparent;
+    }}
+    body {{
+      display: grid;
+      place-items: center;
+    }}
+    .stage {{
+      width: {size}px;
+      height: {size}px;
+      display: grid;
+      place-items: center;
+      background: transparent;
+    }}
+    .stage > svg {{
+      display: block;
+      width: 100%;
+      height: 100%;
+    }}
+  </style>
+</head>
+<body>
+  <div class="stage">{svg_text}</div>
+</body>
+</html>
+"""
+    with tempfile.TemporaryDirectory(prefix="kabootar-svg-render-") as temp_dir:
+        temp_path = Path(temp_dir)
+        html_path = temp_path / "render.html"
+        png_path = temp_path / "render.png"
+        html_path.write_text(html, encoding="utf-8")
+        cmd = [
+            str(browser),
+            "--headless=new",
+            "--disable-gpu",
+            "--hide-scrollbars",
+            "--force-device-scale-factor=1",
+            "--default-background-color=00000000",
+            f"--window-size={size},{size}",
+            f"--screenshot={png_path}",
+            html_path.resolve().as_uri(),
+        ]
+        completed = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if completed.returncode != 0 or not png_path.exists():
+            stderr = (completed.stderr or completed.stdout or "").strip()
+            raise RuntimeError(f"headless browser render failed: {stderr or completed.returncode}")
+        return Image.open(png_path).convert("RGBA")
 
 
 def _extract_embedded_png(svg_text: str) -> Image.Image:
@@ -162,14 +246,18 @@ def _save_android_icons(master: Image.Image) -> None:
 def main() -> None:
     raw_svg = _read_svg()
     cleaned_svg = _clean_svg(raw_svg)
-    _save_web_svgs(cleaned_svg)
+    _save_compatibility_svgs(raw_svg)
 
     raster_source = "svg-render"
     try:
         raster = _render_svg(cleaned_svg, size=1024)
     except Exception as exc:
-        raster = _extract_embedded_png(cleaned_svg)
-        raster_source = f"embedded-png-fallback:{exc}"
+        try:
+            raster = _render_svg_via_browser(cleaned_svg, size=1024)
+            raster_source = f"browser-screenshot-fallback:{type(exc).__name__}"
+        except Exception as browser_exc:
+            raster = _extract_embedded_png(cleaned_svg)
+            raster_source = f"embedded-png-fallback:{exc}; {browser_exc}"
     raster = _remove_edge_white_background(raster)
     master = _fit_square(raster, size=1024, inner_ratio=0.88)
 
@@ -178,7 +266,8 @@ def main() -> None:
     _save_android_icons(master)
 
     print(f"[brand] source: {SOURCE_SVG}")
-    print(f"[brand] web: {FRONTEND_STATIC / 'kabootar.svg'}")
+    print(f"[brand] web: {SOURCE_SVG}")
+    print(f"[brand] compatibility mirror: {LEGACY_BUILD_SVG}")
     print(f"[brand] windows icon: {WINDOWS_ICON}")
     print(f"[brand] linux icon: {SOURCE_SVG}")
     print(f"[brand] macos icon: {MACOS_ICON}")

@@ -4,6 +4,7 @@ from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, Uni
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.utils import deserialize_photo_items
 
 
 class Channel(Base):
@@ -37,6 +38,7 @@ class Message(Base):
     media_kind: Mapped[str] = mapped_column(String(32), default="")
     photo_mime: Mapped[str] = mapped_column(String(64), default="")
     photo_b64: Mapped[str] = mapped_column(Text, default="")
+    photos_json: Mapped[str] = mapped_column(Text, default="")
     reply_to_message_id: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     reply_author: Mapped[str] = mapped_column(String(255), default="")
     reply_text: Mapped[str] = mapped_column(Text, default="")
@@ -45,3 +47,7 @@ class Message(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     channel: Mapped[Channel] = relationship(back_populates="messages")
+
+    @property
+    def photo_items(self) -> list[dict[str, str]]:
+        return deserialize_photo_items(self.photos_json, fallback_mime=self.photo_mime, fallback_b64=self.photo_b64)

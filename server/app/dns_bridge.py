@@ -21,7 +21,7 @@ from app.scraper import (
 )
 from app.settings_store import get_setting, set_setting
 from app.text_packer import pack_text
-from app.utils import normalize_tg_s_url, parse_csv
+from app.utils import normalize_photo_items, normalize_tg_s_url, parse_csv, primary_photo_fields, serialize_photo_items
 from app.versioning import app_meta
 
 
@@ -82,7 +82,44 @@ def _text_message_weight(message: dict) -> int:
 
 
 def _media_message_weight(message: dict) -> int:
-    return 64 + len((message.get("photo_b64", "") or "")) + _utf8_len(message.get("photo_mime", ""))
+    photos_json = (message.get("photos_json", "") or "").strip()
+    return 64 + len(photos_json or (message.get("photo_b64", "") or "")) + _utf8_len(message.get("photo_mime", ""))
+
+
+def _fetch_photo_items(
+    photo_urls: list[str],
+    proxies: list[str],
+    media_cache: dict[str, tuple[str, str]],
+    *,
+    timeout_seconds: int,
+    max_photo_bytes: int,
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for photo_url in photo_urls:
+        if not photo_url:
+            continue
+        photo_mime = ""
+        photo_b64 = ""
+        if photo_url in media_cache:
+            photo_mime, photo_b64 = media_cache[photo_url]
+        else:
+            try:
+                fetched = fetch_photo_base64_with_proxies(
+                    photo_url,
+                    proxies,
+                    attempts=2,
+                    timeout_seconds=timeout_seconds,
+                    retry_delay_seconds=5,
+                    max_bytes=max_photo_bytes,
+                )
+            except Exception:
+                fetched = None
+            if fetched:
+                photo_mime, photo_b64 = fetched
+            media_cache[photo_url] = (photo_mime, photo_b64)
+        if photo_b64:
+            items.append({"mime": photo_mime, "b64": photo_b64})
+    return normalize_photo_items(items)
 
 
 def _payload_crc_bytes(raw: bytes) -> str:
@@ -273,37 +310,29 @@ class BridgeCache:
                 if int(m.get("message_id") or 0) <= 0:
                     continue
 
-                photo_mime = ""
-                photo_b64 = ""
-                photo_url = (m.get("photo_url") or "").strip()
-                if photo_url:
-                    if photo_url in media_cache:
-                        photo_mime, photo_b64 = media_cache[photo_url]
-                    else:
-                        try:
-                            fetched = fetch_photo_base64_with_proxies(
-                                photo_url,
-                                proxies,
-                                attempts=2,
-                                timeout_seconds=20,
-                                retry_delay_seconds=5,
-                                max_bytes=max_photo_bytes,
-                            )
-                        except Exception:
-                            fetched = None
-                        if fetched:
-                            photo_mime, photo_b64 = fetched
-                        media_cache[photo_url] = (photo_mime, photo_b64)
+                photo_urls = [str(url_part).strip() for url_part in (m.get("photo_urls") or []) if str(url_part).strip()]
+                if not photo_urls and str(m.get("photo_url") or "").strip():
+                    photo_urls = [str(m.get("photo_url") or "").strip()]
+                photo_items = _fetch_photo_items(
+                    photo_urls,
+                    proxies,
+                    media_cache,
+                    timeout_seconds=20,
+                    max_photo_bytes=max_photo_bytes,
+                )
+                photo_mime, photo_b64 = primary_photo_fields(photo_items)
+                photos_json = serialize_photo_items(photo_items)
 
                 messages_payload.append(
                     {
                         "message_id": int(m.get("message_id") or 0),
                         "published_at": m.get("published_at", ""),
                         "text": m.get("text", ""),
-                        "has_media": bool(m.get("has_media")),
-                        "media_kind": m.get("media_kind", "") or "",
+                        "has_media": bool(m.get("has_media")) or bool(photo_b64),
+                        "media_kind": m.get("media_kind", "") or ("photo" if photo_b64 else ""),
                         "photo_mime": photo_mime,
                         "photo_b64": photo_b64,
+                        "photos_json": photos_json,
                         "reply_to_message_id": int(m.get("reply_to_message_id") or 0) or None,
                         "reply_author": m.get("reply_author", "") or "",
                         "reply_text": m.get("reply_text", "") or "",
@@ -359,9 +388,10 @@ class BridgeCache:
                     "media_kind": m.get("media_kind", "") or "",
                     "photo_mime": m.get("photo_mime", "") or "",
                     "photo_b64": m.get("photo_b64", "") or "",
+                    "photos_json": m.get("photos_json", "") or "",
                 }
                 for m in messages_payload
-                if (m.get("photo_b64") or "").strip()
+                if str(m.get("photos_json", "") or "").strip() or str(m.get("photo_b64", "") or "").strip()
             ]
             media_records.sort(key=lambda item: (_media_message_weight(item), int(item.get("message_id") or 0)))
 

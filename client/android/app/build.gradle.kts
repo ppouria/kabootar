@@ -26,7 +26,7 @@ val buildPythonOverride = (System.getenv("KABOOTAR_BUILD_PYTHON") ?: "").trim()
 val buildPythonCommand = if (buildPythonOverride.isNotBlank()) {
     listOf(buildPythonOverride)
 } else if (System.getProperty("os.name").lowercase().contains("windows")) {
-    listOf("py", "-3.11")
+    listOf("py", "-3.13")
 } else {
     listOf("python3")
 }
@@ -87,7 +87,7 @@ android {
         versionCode = appVersionCode
         versionName = appVersionName
         ndk {
-            abiFilters += listOf("arm64-v8a", "x86", "x86_64")
+            abiFilters += listOf("arm64-v8a", "x86_64")
         }
         buildConfigField("String", "APP_VERSION_NAME", "\"${appVersionName.replace("\\", "\\\\").replace("\"", "\\\"")}\"")
         buildConfigField("int", "APP_VERSION_CODE", appVersionCode.toString())
@@ -101,7 +101,7 @@ android {
             isMinifyEnabled = false
         }
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = false
             signingConfig = if (hasReleaseSigning) signingConfigs.getByName("kabootarRelease") else signingConfigs.getByName("debug")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -114,7 +114,7 @@ android {
         abi {
             isEnable = true
             reset()
-            include("arm64-v8a", "x86", "x86_64")
+            include("arm64-v8a", "x86_64")
             isUniversalApk = true
         }
     }
@@ -136,15 +136,22 @@ android {
         checkReleaseBuilds = false
         abortOnError = false
     }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
 }
 
 configure<ChaquopyExtension> {
     defaultConfig {
-        // Chaquopy-stable runtime for Android packaging
-        version = "3.11"
+        // Prefer Python 3.13 for better compatibility on current Android devices.
+        version = "3.13"
         buildPython(*buildPythonCommand.toTypedArray())
         pip {
             install("Flask==3.0.3")
+            install("Pillow==11.0.0")
             install("SQLAlchemy==2.0.36")
             install("python-dotenv==1.0.1")
             install("requests==2.32.3")

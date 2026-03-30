@@ -12,7 +12,7 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Kabootar" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <link rel="stylesheet" href="/static/style.css?v=20260328d" />
+  <link rel="stylesheet" href="/static/style.css?v=20260330a" />
 </head>
 <body>
   <div class="layout">
@@ -195,13 +195,14 @@
         {% endif %}
         {% for m in messages %}
         <div class="msg" id="msg-{{ m.message_id }}" data-message-id="{{ m.message_id }}">
+          {% set photo_items = m.photo_items %}
           {% if m.forward_source %}
           <div class="forward-block">
             <span class="forward-label" data-i18n="index.forwarded_from">Forwarded from</span>
             <span class="forward-source" dir="auto">{{ m.forward_source }}</span>
           </div>
           {% endif %}
-          {% set has_unsupported_media = m.has_media and not m.photo_b64 %}
+          {% set has_unsupported_media = m.has_media and not photo_items %}
           {% if has_unsupported_media %}
           <div class="unsupported-media-note">
             <div class="unsupported-media-title" data-i18n="index.unsupported_media_title">Unsupported media</div>
@@ -230,14 +231,18 @@
           </div>
           {% endif %}
           {% endif %}
-          {% if m.photo_b64 %}
-          <div class="msg-photo-wrap">
-            <img
-              class="msg-photo"
-              src="data:{{ m.photo_mime or 'image/jpeg' }};base64,{{ m.photo_b64 }}"
-              alt="photo #{{ m.message_id }}"
-              loading="lazy"
-            />
+          {% if photo_items %}
+          <div class="msg-photo-wrap{% if (photo_items | length) > 1 %} multi-photo-wrap{% endif %}">
+            <div class="msg-photo-grid" data-count="{{ photo_items | length }}">
+              {% for photo in photo_items %}
+              <img
+                class="msg-photo"
+                src="data:{{ photo.mime or 'image/jpeg' }};base64,{{ photo.b64 }}"
+                alt="photo {{ loop.index }} of {{ photo_items | length }} #{{ m.message_id }}"
+                loading="lazy"
+              />
+              {% endfor %}
+            </div>
           </div>
           {% endif %}
           {% if m.text %}

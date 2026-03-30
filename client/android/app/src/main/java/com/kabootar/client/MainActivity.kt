@@ -1,8 +1,11 @@
 package com.kabootar.client
 
 import android.annotation.SuppressLint
+import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
+import android.view.WindowManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -10,10 +13,14 @@ import android.webkit.WebResourceError
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.widget.FrameLayout
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.Insets
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import com.chaquo.python.Python
-import com.chaquo.python.android.AndroidPlatform
 import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
@@ -22,8 +29,13 @@ class MainActivity : AppCompatActivity() {
         private const val TAG = "KabootarAndroid"
     }
 
+    private lateinit var rootView: FrameLayout
     private lateinit var webView: WebView
-    private val backendExecutor = Executors.newSingleThreadExecutor()
+    private val backendExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "kabootar-backend-1").apply {
+            isDaemon = true
+        }
+    }
     @Volatile
     private var backendState = "idle"
     @Volatile
@@ -36,9 +48,13 @@ class MainActivity : AppCompatActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        configureEdgeToEdge()
         setContentView(R.layout.activity_main)
 
+        rootView = findViewById(R.id.rootView)
         webView = findViewById(R.id.webView)
+        applyWindowInsets()
+        webView.setBackgroundColor(Color.TRANSPARENT)
 
         with(webView.settings) {
             javaScriptEnabled = true
@@ -90,7 +106,41 @@ class MainActivity : AppCompatActivity() {
         }
 
         loadBootstrap()
+        Log.i(
+            TAG,
+            "MainActivity.onCreate version=${BuildConfig.APP_VERSION_NAME} thread=${Thread.currentThread().name} pythonStarted=${Python.isStarted()} runtimeState=${KabootarApp.runtimeState()}",
+        )
         startLocalBackend(false)
+    }
+
+    private fun configureEdgeToEdge() {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        window.statusBarColor = Color.TRANSPARENT
+        window.navigationBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val attrs = window.attributes
+            attrs.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            window.attributes = attrs
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.isNavigationBarContrastEnforced = false
+        }
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = false
+            isAppearanceLightNavigationBars = false
+        }
+    }
+
+    private fun applyWindowInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, windowInsets ->
+            val insetTypes = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            val systemInsets = windowInsets.getInsets(insetTypes)
+            view.setPadding(systemInsets.left, systemInsets.top, systemInsets.right, systemInsets.bottom)
+            WindowInsetsCompat.Builder(windowInsets)
+                .setInsets(insetTypes, Insets.NONE)
+                .build()
+        }
+        ViewCompat.requestApplyInsets(rootView)
     }
 
     private fun loadBootstrap() {
@@ -115,10 +165,30 @@ class MainActivity : AppCompatActivity() {
             "Starting local backend..."
         }
 
+        try {
+            Log.i(
+                TAG,
+                "startLocalBackend force=$force thread=${Thread.currentThread().name} pythonStarted=${Python.isStarted()} runtimeState=${KabootarApp.runtimeState()}",
+            )
+            KabootarApp.ensurePythonStarted(application)
+        } catch (exc: Throwable) {
+            Log.e(TAG, "Python runtime startup failed before backend execution", exc)
+            backendState = "error"
+            backendMessage = KabootarApp.runtimeMessage()
+            loadBootstrap()
+            Toast.makeText(this, "Python runtime failed to start", Toast.LENGTH_LONG).show()
+            backendStarting = false
+            return
+        }
+
         backendExecutor.execute {
             try {
+                Log.i(
+                    TAG,
+                    "backend executor entered thread=${Thread.currentThread().name} pythonStarted=${Python.isStarted()} runtimeState=${KabootarApp.runtimeState()}",
+                )
                 if (!Python.isStarted()) {
-                    Python.start(AndroidPlatform(applicationContext))
+                    error("Python runtime is not initialized. Application startup did not complete.")
                 }
                 val runtime = Python.getInstance().getModule("kabootar_android.runtime")
                 val url = runtime.callAttr(

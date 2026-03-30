@@ -16,7 +16,7 @@ from app.scraper import (
     parse_recent_messages,
 )
 from app.settings_store import get_setting
-from app.utils import normalize_tg_s_url, parse_csv
+from app.utils import normalize_photo_items, normalize_tg_s_url, parse_csv, primary_photo_fields, serialize_photo_items
 
 logger = logging.getLogger("kabootar.sync")
 _SYNC_EXEC_LOCK = threading.Lock()
@@ -111,6 +111,42 @@ def _direct_text_batch_size() -> int:
 
 def _direct_media_batch_size() -> int:
     return _direct_batch_size("DIRECT_MEDIA_APPLY_BATCH_SIZE", 2, 1, 10)
+
+
+def _fetch_photo_items(
+    photo_urls: list[str],
+    proxies: list[str],
+    media_cache: dict[str, tuple[str, str]],
+    *,
+    timeout_seconds: int,
+    max_photo_bytes: int,
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    for photo_url in photo_urls:
+        if not photo_url:
+            continue
+        photo_mime = ""
+        photo_b64 = ""
+        if photo_url in media_cache:
+            photo_mime, photo_b64 = media_cache[photo_url]
+        else:
+            try:
+                fetched = fetch_photo_base64_with_proxies(
+                    photo_url,
+                    proxies,
+                    attempts=2,
+                    timeout_seconds=timeout_seconds,
+                    retry_delay_seconds=5,
+                    max_bytes=max_photo_bytes,
+                )
+            except Exception:
+                fetched = None
+            if fetched:
+                photo_mime, photo_b64 = fetched
+            media_cache[photo_url] = (photo_mime, photo_b64)
+        if photo_b64:
+            items.append({"mime": photo_mime, "b64": photo_b64})
+    return normalize_photo_items(items)
 
 
 def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: bool = False, priority_channel: str = "") -> dict:
@@ -269,7 +305,12 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                 channel_saved = 0
                 changed_message_ids: set[int] = set()
                 text_items = sorted(recent, key=lambda item: (_direct_text_weight(item), int(item.get('message_id') or 0)))
-                media_items = [item for item in recent if (item.get("photo_url") or "").strip()]
+                media_items = [
+                    item
+                    for item in recent
+                    if [url for url in (item.get("photo_urls") or []) if str(url).strip()]
+                    or str(item.get("photo_url") or "").strip()
+                ]
                 total_work = len(text_items) + len(media_items)
                 _emit_progress(
                     progress,
@@ -369,27 +410,18 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
 
                 dirty = 0
                 for media_index, item in enumerate(media_items, start=1):
-                    photo_mime = ""
-                    photo_b64 = ""
-                    photo_url = (item.get("photo_url") or "").strip()
-                    if photo_url:
-                        if photo_url in media_cache:
-                            photo_mime, photo_b64 = media_cache[photo_url]
-                        else:
-                            try:
-                                fetched = fetch_photo_base64_with_proxies(
-                                    photo_url,
-                                    proxies,
-                                    attempts=2,
-                                    timeout_seconds=timeout_seconds,
-                                    retry_delay_seconds=5,
-                                    max_bytes=max_photo_bytes,
-                                )
-                            except Exception:
-                                fetched = None
-                            if fetched:
-                                photo_mime, photo_b64 = fetched
-                            media_cache[photo_url] = (photo_mime, photo_b64)
+                    photo_urls = [str(url).strip() for url in (item.get("photo_urls") or []) if str(url).strip()]
+                    if not photo_urls and str(item.get("photo_url") or "").strip():
+                        photo_urls = [str(item.get("photo_url") or "").strip()]
+                    photo_items = _fetch_photo_items(
+                        photo_urls,
+                        proxies,
+                        media_cache,
+                        timeout_seconds=timeout_seconds,
+                        max_photo_bytes=max_photo_bytes,
+                    )
+                    photo_mime, photo_b64 = primary_photo_fields(photo_items)
+                    photos_json = serialize_photo_items(photo_items)
 
                     existing = db.scalar(
                         select(Message).where(
@@ -404,6 +436,9 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                             changed = True
                         if existing.photo_b64 != photo_b64:
                             existing.photo_b64 = photo_b64
+                            changed = True
+                        if existing.photos_json != photos_json:
+                            existing.photos_json = photos_json
                             changed = True
                         if not bool(existing.has_media):
                             existing.has_media = True
@@ -423,6 +458,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                                 media_kind=item.get('media_kind', '') or ('photo' if photo_b64 else ''),
                                 photo_mime=photo_mime,
                                 photo_b64=photo_b64,
+                                photos_json=photos_json,
                                 reply_to_message_id=item.get('reply_to_message_id'),
                                 reply_author=item.get('reply_author', '') or '',
                                 reply_text=item.get('reply_text', '') or '',

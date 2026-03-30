@@ -1445,10 +1445,10 @@ def create_app() -> Flask:
                 for m in msgs:
                     text_key = " ".join((m.text or "").split())
                     # Skip only repeated pure-text duplicates; keep media posts.
-                    if text_key and not m.has_media and not (m.photo_b64 or "").strip() and text_key == prev_text_key:
+                    if text_key and not m.has_media and not m.photo_items and text_key == prev_text_key:
                         continue
                     deduped.append(m)
-                    prev_text_key = text_key if text_key and not m.has_media and not (m.photo_b64 or "").strip() else None
+                    prev_text_key = text_key if text_key and not m.has_media and not m.photo_items else None
                 msgs = deduped
 
         return render_template(

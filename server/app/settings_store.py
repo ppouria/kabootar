@@ -28,7 +28,7 @@ def ensure_table() -> None:
             text(
                 """
                 CREATE TABLE IF NOT EXISTS app_settings (
-                  key TEXT PRIMARY KEY,
+                  key TEXT NOT NULL PRIMARY KEY,
                   value TEXT NOT NULL
                 )
                 """

@@ -72,6 +72,7 @@ Outputs:
 
 ## Notes
 
-- All build branding comes from `build/assets/kabootar.svg`.
+- All build branding comes from `frontend/static/kabootar.svg`.
+- `build/assets/kabootar.svg` is only a generated compatibility mirror for older build paths.
 - The final Android output is published as `universal` in this project.
 - The client can run in DNS mode or Direct mode, but the build steps are the same.
