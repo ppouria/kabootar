@@ -24,8 +24,12 @@ class KabootarApp : PyApplication() {
         @Volatile
         private var runtimeMessageValue = "Python runtime has not started yet."
 
+        @Volatile
+        private var appContextValue: Context? = null
+
         @Synchronized
         fun ensurePythonStarted(app: Application) {
+            appContextValue = app.applicationContext
             if (Python.isStarted()) {
                 runtimeStateValue = STARTUP_STATE_READY
                 runtimeMessageValue = "Python runtime is ready."
@@ -111,9 +115,12 @@ class KabootarApp : PyApplication() {
         fun runtimeState(): String = runtimeStateValue
 
         fun runtimeMessage(): String = runtimeMessageValue
+
+        fun appContext(): Context = appContextValue ?: throw IllegalStateException("kabootar_app_context_unavailable")
     }
 
     override fun onCreate() {
+        appContextValue = applicationContext
         configurePythonEnvironment()
         prepareForStartup(this)
         Log.i(TAG, "PyApplication.onCreate begin thread=${Thread.currentThread().name}")

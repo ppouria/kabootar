@@ -3,11 +3,13 @@
   "private": true,
   "version": "0.5.1",
   "devDependencies": {
+    "lucide-static": "^1.7.0",
     "typescript": "^5.6.3"
   },
   "scripts": {
+    "sync-icons": "node tools/sync-icons.mjs",
     "sync-version": "node tools/sync-version.mjs",
-    "prebuild": "npm run sync-version",
+    "prebuild": "npm run sync-version && npm run sync-icons",
     "build:settings": "tsc --target ES2020 --module ES2020 --outDir static --rootDir src src/settings.ts",
     "build:index": "tsc --target ES2020 --module ES2020 --outDir static --rootDir src src/index.ts",
     "build": "npm run build:settings && npm run build:index"

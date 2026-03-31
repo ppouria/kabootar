@@ -7,12 +7,30 @@
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <meta name="theme-color" content="#081018" />
+  <meta name="theme-color" content="#0b1524" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Kabootar" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <link rel="stylesheet" href="/static/style.css?v=20260330a" />
+  <script>
+    (() => {
+      try {
+        const key = 'kabootar_channel_nav_loading_v1';
+        const raw = sessionStorage.getItem(key);
+        if (!raw) return;
+        const state = JSON.parse(raw);
+        const at = Number(state && state.at ? state.at : 0);
+        if (!at || Date.now() - at > 20000) {
+          sessionStorage.removeItem(key);
+          return;
+        }
+        document.documentElement.classList.add('channel-loading-pending');
+      } catch {
+        // Ignore storage errors.
+      }
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/style.css?v=20260331j" />
 </head>
 <body>
   <div class="layout">
@@ -20,13 +38,21 @@
       <div class="sidebar-title-row">
         <div class="sidebar-brand">
           <img class="brand-logo" src="/static/kabootar.svg" alt="Kabootar" width="22" height="22" decoding="async" />
-          <div class="sidebar-title" data-i18n="index.channels_title">Channels</div>
+          <div class="sidebar-brand-copy">
+            <div class="sidebar-title">Kabootar</div>
+            <div class="sidebar-subtitle" data-i18n="index.channels_title">Channels</div>
+          </div>
         </div>
         <div class="sidebar-actions">
-          <button type="button" class="lite-btn" id="channelSearchToggle" data-i18n-title="index.search_channels" aria-label="Search channels">&#128269;</button>
-          <button type="button" class="lite-btn" id="syncNowBtn" data-i18n-title="index.update_now" title="Update now">↻</button>
-          <a class="lite-btn" href="/settings" data-i18n-title="index.settings" title="Settings">⚙</a>
-          <button class="lite-btn" id="liteBtn" data-i18n="index.lite_mode" data-i18n-title="index.lite_mode" title="Lite mode">Lite</button>
+          <button type="button" class="lite-btn icon-btn" id="channelSearchToggle" data-i18n-title="index.search_channels" aria-label="Search channels">
+            <span class="icon-glyph icon-search" aria-hidden="true"></span>
+          </button>
+          <button type="button" class="lite-btn icon-btn" id="syncNowBtn" data-i18n-title="index.update_now" title="Update now">
+            <span class="icon-glyph icon-refresh-cw" aria-hidden="true"></span>
+          </button>
+          <a class="lite-btn icon-btn" href="/settings" data-i18n-title="index.settings" title="Settings">
+            <span class="icon-glyph icon-settings-2" aria-hidden="true"></span>
+          </a>
           <button class="lite-btn" id="langToggle" data-i18n-title="common.change_language" title="Change language">FA</button>
         </div>
       </div>
@@ -105,218 +131,187 @@
       data-dns-domains-count="{{ dns_domains_count }}"
     >
       <div class="chat-header">
-        <button class="mobile-menu-btn" id="menuBtn" data-i18n-title="index.open_channels" aria-label="Open channels">☰</button>
-        {% if selected_channel %}
-        {% if selected_channel.avatar_b64 %}
-        <img class="header-avatar" src="data:{{ selected_channel.avatar_mime or 'image/jpeg' }};base64,{{ selected_channel.avatar_b64 }}" alt="{{ selected_channel.title or selected_channel.username }}" />
-        {% elif selected_channel.avatar_url %}
-        <img class="header-avatar" src="{{ selected_channel.avatar_url }}" alt="{{ selected_channel.title or selected_channel.username }}" referrerpolicy="no-referrer" />
-        {% else %}
-        <div class="header-avatar avatar-fallback" aria-hidden="true">{{ ((selected_channel.username or '?')[:2]) | upper }}</div>
-        {% endif %}
-        <div class="header-meta">
-          <div class="header-title">{{ selected_channel.title or ('@' ~ selected_channel.username) }}</div>
-          <div class="header-sub">{{ selected_channel.source_url }}</div>
+        <button class="mobile-menu-btn lite-btn icon-btn" id="menuBtn" data-i18n-title="index.open_channels" aria-label="Open channels" hidden>
+          <span class="icon-glyph icon-menu" aria-hidden="true"></span>
+        </button>
+        <div id="chatHeaderPrimary">
+          {% include "_chat_header_primary.html" %}
         </div>
-        {% else %}
-        <div class="header-meta">
-          <div class="header-title" data-i18n="index.no_channel_selected">No channel selected</div>
-          <div class="header-sub" data-i18n="index.no_channel_selected_sub">Add a channel to start syncing.</div>
-        </div>
-        {% endif %}
         <div class="header-actions">
           <button
             type="button"
-            class="lite-btn search-toggle-btn"
+            class="lite-btn icon-btn search-toggle-btn"
             id="messageSearchToggle"
             data-i18n-title="index.search_messages"
             aria-label="Search messages"
             {% if not selected_channel or not messages %}disabled{% endif %}
-          >&#128269;</button>
+          >
+            <span class="icon-glyph icon-search" aria-hidden="true"></span>
+          </button>
         </div>
       </div>
-      <div class="message-search-bar" id="messageSearchBar" hidden>
-        <div class="message-search-shell">
-          <input
-            type="search"
-            class="message-search-input"
-            id="messageSearchInput"
-            data-i18n-placeholder="index.search_messages"
-            placeholder="Search messages"
-            autocomplete="off"
-            spellcheck="false"
-          />
-          <button
-            type="button"
-            class="message-search-clear"
-            id="messageSearchClear"
-            data-i18n-title="index.clear_search"
-            title="Clear search"
-            hidden
-          >×</button>
-        </div>
-        <button type="button" class="lite-btn message-search-close" id="messageSearchClose" data-i18n="common.close">Close</button>
-      </div>
-      {% if ui_msg %}
-      <div class="top-msg">{{ ui_msg }}</div>
-      {% endif %}
-      <div class="message-search-empty" id="messageSearchEmpty" hidden data-i18n="index.no_message_results">No matching messages.</div>
-
-      <div class="messages" id="messages">
-        {% if not channels %}
-        <div class="empty-state">
-          <h3 data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_title_domain_first{% else %}index.empty_title{% endif %}">
-            {% if source_mode == 'dns' and dns_domains_count == 0 %}
-            Start by adding a domain
-            {% else %}
-            Start by adding a channel
-            {% endif %}
-          </h3>
-          <p data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_desc_domain_first{% else %}index.empty_desc{% endif %}">
-            {% if source_mode == 'dns' and dns_domains_count == 0 %}
-            In DNS mode, add a domain first and then add channels.
-            {% else %}
-            Paste @username or https://t.me/username.
-            {% endif %}
-          </p>
-          <div class="empty-actions">
-            {% if source_mode == 'dns' %}
-            <button type="button" class="lite-btn add-domain-btn" id="addDomainBtnMain" data-i18n="index.add_domain">+ Add Domain</button>
-            {% endif %}
+      <div class="chat-feed" id="chatFeed">
+        <div class="message-search-bar" id="messageSearchBar" hidden>
+          <div class="message-search-shell">
+            <input
+              type="search"
+              class="message-search-input"
+              id="messageSearchInput"
+              data-i18n-placeholder="index.search_messages"
+              placeholder="Search messages"
+              autocomplete="off"
+              spellcheck="false"
+            />
             <button
               type="button"
-              class="lite-btn add-channel-btn"
-              id="addChannelBtnMain"
-              data-i18n="index.add_channel"
-              {% if source_mode == 'dns' and dns_domains_count == 0 %}disabled{% endif %}
-            >+ Add Channel</button>
+              class="message-search-clear"
+              id="messageSearchClear"
+              data-i18n-title="index.clear_search"
+              title="Clear search"
+              hidden
+            >×</button>
           </div>
+          <button type="button" class="lite-btn message-search-close" id="messageSearchClose" data-i18n="common.close">Close</button>
         </div>
+        {% if ui_msg %}
+        <div class="top-msg">{{ ui_msg }}</div>
         {% endif %}
-        {% for m in messages %}
-        <div class="msg" id="msg-{{ m.message_id }}" data-message-id="{{ m.message_id }}">
-          {% set photo_items = m.photo_items %}
-          {% if m.forward_source %}
-          <div class="forward-block">
-            <span class="forward-label" data-i18n="index.forwarded_from">Forwarded from</span>
-            <span class="forward-source" dir="auto">{{ m.forward_source }}</span>
-          </div>
-          {% endif %}
-          {% set has_unsupported_media = m.has_media and not photo_items %}
-          {% if has_unsupported_media %}
-          <div class="unsupported-media-note">
-            <div class="unsupported-media-title" data-i18n="index.unsupported_media_title">Unsupported media</div>
-            <div
-              class="unsupported-media-copy"
-              data-media-kind="{{ m.media_kind or 'media' }}"
-              dir="auto"
-            >{{ m.unsupported_media_notice or 'This message contains unsupported media.' }}</div>
-          </div>
-          {% endif %}
-          {% if m.reply_to_message_id or m.reply_author or m.reply_text %}
-          {% if m.reply_to_message_id %}
-          <a class="reply-block" href="#msg-{{ m.reply_to_message_id }}">
-            <div class="reply-head">
-              <span class="reply-author">{{ m.reply_author or 'Reply' }}</span>
-              <span class="reply-id">#{{ m.reply_to_message_id }}</span>
-            </div>
-            <div class="reply-text" dir="auto">{{ m.reply_text or '...' }}</div>
-          </a>
-          {% else %}
-          <div class="reply-block">
-            <div class="reply-head">
-              <span class="reply-author">{{ m.reply_author or 'Reply' }}</span>
-            </div>
-            <div class="reply-text" dir="auto">{{ m.reply_text or '...' }}</div>
-          </div>
-          {% endif %}
-          {% endif %}
-          {% if photo_items %}
-          <div class="msg-photo-wrap{% if (photo_items | length) > 1 %} multi-photo-wrap{% endif %}">
-            <div class="msg-photo-grid" data-count="{{ photo_items | length }}">
-              {% for photo in photo_items %}
-              <img
-                class="msg-photo"
-                src="data:{{ photo.mime or 'image/jpeg' }};base64,{{ photo.b64 }}"
-                alt="photo {{ loop.index }} of {{ photo_items | length }} #{{ m.message_id }}"
-                loading="lazy"
-              />
-              {% endfor %}
-            </div>
-          </div>
-          {% endif %}
-          {% if m.text %}
-          {% if has_unsupported_media %}
-          <div class="caption-block">
-            <div class="caption-label" data-i18n="index.caption_label">Caption</div>
-            <div class="text caption-text" dir="auto">{{ m.text }}</div>
-          </div>
-          {% else %}
-          <div class="text" dir="auto">{{ m.text }}</div>
-          {% endif %}
-          {% endif %}
-          <div class="meta">
-            <span>#{{ m.message_id }}</span>
-            <span class="time" data-iso="{{ m.published_at }}">{{ m.published_at }}</span>
+        <div class="message-search-empty" id="messageSearchEmpty" hidden data-i18n="index.no_message_results">No matching messages.</div>
+
+        <div class="messages" id="messages">
+          {% include "_messages_panel.html" %}
+        </div>
+        <div class="chat-loading-overlay" id="channelLoadingOverlay" aria-live="polite" aria-busy="true">
+          <div class="chat-loading-card" role="status">
+            <span class="chat-loading-spinner" aria-hidden="true"></span>
+            <div class="chat-loading-title" data-i18n="index.channel_loading_title">Loading latest messages...</div>
+            <div class="chat-loading-subtitle" data-i18n="index.channel_loading_subtitle">Please wait a moment.</div>
           </div>
         </div>
-        {% endfor %}
       </div>
     </main>
   </div>
 
   <div class="modal" id="addModal" hidden>
-    <div class="modal-card classic">
-      <div class="modal-title" data-i18n="index.add_channel_modal_title">Add Channel</div>
-      <form id="addModalForm" method="post" action="/channel/add">
-        <textarea
-          class="add-input"
-          name="channel"
-          rows="3"
-          data-i18n-placeholder="index.channel_placeholder"
-          placeholder="@id1,@id2 or one channel per line"
-        ></textarea>
-        <div class="add-form-error" hidden data-i18n="index.channel_required">Channel is required.</div>
-        <div class="add-form-loading" hidden>
-          <span class="spinner"></span>
-          <span data-i18n="index.request_in_progress">Request in progress...</span>
+    <div class="modal-card add-dialog-card">
+      <div class="modal-head">
+        <div class="modal-head-copy">
+          <div class="dialog-kicker">Telegram</div>
+          <div class="modal-title" data-i18n="index.add_channel_modal_title">Add Channel</div>
+          <div class="dialog-subtitle" data-i18n="index.add_channel_modal_subtitle">Paste one or more public Telegram channel IDs. Kabootar will normalize the format automatically.</div>
         </div>
-        <div class="modal-actions">
-          <button type="button" class="lite-btn" id="addModalCancel" data-i18n="common.cancel">Cancel</button>
-          <button type="submit" class="lite-btn" id="addModalSubmit" data-i18n="common.add">Add</button>
+        <button
+          type="button"
+          class="modal-close"
+          id="addModalClose"
+          data-i18n-title="common.close"
+          aria-label="Close"
+        >×</button>
+      </div>
+      <form id="addModalForm" method="post" action="/channel/add" class="add-form">
+        <div class="modal-body">
+          <label class="form-field">
+            <span class="field-label" data-i18n="index.channel_field_label">Channel input</span>
+            <textarea
+              class="add-input add-input-large"
+              name="channel"
+              rows="4"
+              data-i18n-placeholder="index.channel_placeholder"
+              placeholder="@id1,@id2 or one channel per line"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+            ></textarea>
+          </label>
+          <div class="dialog-panel">
+            <div class="dialog-panel-title" data-i18n="index.examples_label">Examples</div>
+            <div class="field-note" data-i18n="index.channel_formats_hint">Accepted: @id, id, t.me/id, https://t.me/id</div>
+            <div class="format-list" aria-hidden="true">
+              <span class="format-chip">@id</span>
+              <span class="format-chip">id</span>
+              <span class="format-chip">t.me/id</span>
+              <span class="format-chip">https://t.me/id</span>
+              <span class="format-chip">t.me/s/id</span>
+            </div>
+          </div>
+          <div class="preview-panel" id="channelPreview" hidden>
+            <div class="preview-title" id="channelPreviewCount" data-i18n="index.channel_detected_none">No valid public channels detected yet.</div>
+            <div class="preview-list" id="channelPreviewList"></div>
+          </div>
+          <div class="add-form-error" hidden data-i18n="index.channel_required">Channel is required.</div>
+          <div class="add-form-loading" hidden>
+            <span class="spinner"></span>
+            <span data-i18n="index.request_in_progress">Request in progress...</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="addModalCancel" data-i18n="common.cancel">Cancel</button>
+            <button type="submit" class="btn-primary" id="addModalSubmit" data-i18n="index.add_channel_submit">Add channels</button>
+          </div>
         </div>
       </form>
     </div>
   </div>
 
   <div class="modal" id="addDomainModal" hidden>
-    <div class="modal-card classic">
-      <div class="modal-title" data-i18n="index.add_domain_modal_title">Add Domain</div>
-      <form id="addDomainModalForm" method="post" action="/domain/add">
-        <input
-          class="add-input"
-          type="text"
-          name="domain"
-          data-i18n-placeholder="settings.placeholder.domain"
-          placeholder="domain"
-          autocomplete="off"
-        />
-        <input
-          class="add-input"
-          type="password"
-          name="password"
-          data-i18n-placeholder="index.password_placeholder"
-          placeholder="password (optional)"
-          autocomplete="off"
-        />
-        <div class="add-form-error" hidden data-i18n="index.domain_required">Domain is required.</div>
-        <div class="add-form-loading" hidden>
-          <span class="spinner"></span>
-          <span data-i18n="index.request_in_progress">Request in progress...</span>
+    <div class="modal-card add-dialog-card">
+      <div class="modal-head">
+        <div class="modal-head-copy">
+          <div class="dialog-kicker">DNS</div>
+          <div class="modal-title" data-i18n="index.add_domain_modal_title">Add Domain</div>
+          <div class="dialog-subtitle" data-i18n="index.add_domain_modal_subtitle">Paste a host or full URL. Kabootar will extract and save the domain automatically.</div>
         </div>
-        <div class="modal-actions">
-          <button type="button" class="lite-btn" id="addDomainModalCancel" data-i18n="common.cancel">Cancel</button>
-          <button type="submit" class="lite-btn" id="addDomainModalSubmit" data-i18n="common.add">Add</button>
+        <button
+          type="button"
+          class="modal-close"
+          id="addDomainModalClose"
+          data-i18n-title="common.close"
+          aria-label="Close"
+        >×</button>
+      </div>
+      <form id="addDomainModalForm" method="post" action="/domain/add" class="add-form">
+        <div class="modal-body">
+          <label class="form-field">
+            <span class="field-label" data-i18n="index.domain_field_label">Domain</span>
+            <input
+              class="add-input"
+              type="text"
+              name="domain"
+              data-i18n-placeholder="settings.placeholder.domain"
+              placeholder="domain"
+              autocomplete="off"
+              autocapitalize="off"
+              spellcheck="false"
+            />
+          </label>
+          <div class="dialog-panel">
+            <div class="dialog-panel-title" data-i18n="index.examples_label">Examples</div>
+            <div class="field-note" data-i18n="index.domain_formats_hint">You can paste example.com or https://example.com/path</div>
+          </div>
+          <div class="helper-inline" id="addDomainNormalizedHint" hidden></div>
+          <label class="form-field">
+            <span class="field-label" data-i18n="index.domain_password_label">Route password</span>
+            <input
+              class="add-input"
+              type="password"
+              name="password"
+              data-i18n-placeholder="index.password_placeholder"
+              placeholder="password (optional)"
+              autocomplete="off"
+            />
+          </label>
+          <div class="add-form-error" hidden data-i18n="index.domain_required">Domain is required.</div>
+          <div class="add-form-loading" hidden>
+            <span class="spinner"></span>
+            <span data-i18n="index.request_in_progress">Request in progress...</span>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <div class="modal-actions">
+            <button type="button" class="btn-ghost" id="addDomainModalCancel" data-i18n="common.cancel">Cancel</button>
+            <button type="submit" class="btn-primary" id="addDomainModalSubmit" data-i18n="index.add_domain_submit">Add domain</button>
+          </div>
         </div>
       </form>
     </div>
@@ -324,56 +319,59 @@
 
   <div class="modal" id="syncModal" hidden>
     <div class="modal-card sync-modal-card">
-      <div class="sync-modal-head">
-        <div>
+      <div class="modal-head sync-modal-head">
+        <div class="modal-head-copy sync-modal-copy">
+          <div class="dialog-kicker">Sync</div>
           <div class="modal-title" data-i18n="index.sync_modal_title">Sync Progress</div>
           <div class="sync-subtitle" id="syncModalPhase" data-i18n="index.sync_waiting">Waiting to start...</div>
         </div>
-        <button type="button" class="lite-btn" id="syncModalClose" data-i18n="common.close">Close</button>
+        <button type="button" class="modal-close" id="syncModalClose" data-i18n-title="common.close" aria-label="Close">×</button>
       </div>
-      <div class="sync-progress-shell">
-        <div class="sync-progress-bar">
-          <div class="sync-progress-fill" id="syncProgressFill" style="width:0%"></div>
+      <div class="modal-body sync-modal-body">
+        <div class="sync-progress-shell">
+          <div class="sync-progress-meta sync-progress-meta-top">
+            <span class="sync-progress-value" id="syncProgressPercent">0%</span>
+            <span class="sync-eta-pill" id="syncEtaLabel">ETA -</span>
+          </div>
+          <div class="sync-progress-bar">
+            <div class="sync-progress-fill" id="syncProgressFill" style="width:0%"></div>
+          </div>
         </div>
-        <div class="sync-progress-meta">
-          <span id="syncProgressPercent">0%</span>
-          <span id="syncEtaLabel">ETA -</span>
+        <div class="sync-chart-wrap">
+          <svg class="sync-chart" id="syncChart" viewBox="0 0 320 72" preserveAspectRatio="none" aria-hidden="true">
+            <polyline id="syncChartLine" fill="none" stroke="currentColor" stroke-width="3" points="0,72 320,72"></polyline>
+          </svg>
         </div>
+        <div class="sync-stats-grid">
+          <div class="sync-stat">
+            <span class="sync-stat-label" data-i18n="index.sync_domains">Domains</span>
+            <strong id="syncDomainsStat">0 / 0</strong>
+          </div>
+          <div class="sync-stat">
+            <span class="sync-stat-label" data-i18n="index.sync_channels">Channels</span>
+            <strong id="syncChannelsStat">0 / 0</strong>
+          </div>
+          <div class="sync-stat">
+            <span class="sync-stat-label" data-i18n="index.sync_messages">Messages</span>
+            <strong id="syncMessagesStat">0 / 0</strong>
+          </div>
+          <div class="sync-stat">
+            <span class="sync-stat-label" data-i18n="index.sync_saved">Updated</span>
+            <strong id="syncSavedStat">0</strong>
+          </div>
+        </div>
+        <div class="sync-current-box">
+          <div class="sync-current-line">
+            <span class="sync-current-label" data-i18n="index.sync_current_domain">Current domain</span>
+            <strong id="syncCurrentDomain">-</strong>
+          </div>
+          <div class="sync-current-line">
+            <span class="sync-current-label" data-i18n="index.sync_current_channel">Current channel</span>
+            <strong id="syncCurrentChannel">-</strong>
+          </div>
+        </div>
+        <div class="sync-result-box" id="syncResultBox" hidden></div>
       </div>
-      <div class="sync-chart-wrap">
-        <svg class="sync-chart" id="syncChart" viewBox="0 0 320 72" preserveAspectRatio="none" aria-hidden="true">
-          <polyline id="syncChartLine" fill="none" stroke="currentColor" stroke-width="3" points="0,72 320,72"></polyline>
-        </svg>
-      </div>
-      <div class="sync-stats-grid">
-        <div class="sync-stat">
-          <span class="sync-stat-label" data-i18n="index.sync_domains">Domains</span>
-          <strong id="syncDomainsStat">0 / 0</strong>
-        </div>
-        <div class="sync-stat">
-          <span class="sync-stat-label" data-i18n="index.sync_channels">Channels</span>
-          <strong id="syncChannelsStat">0 / 0</strong>
-        </div>
-        <div class="sync-stat">
-          <span class="sync-stat-label" data-i18n="index.sync_messages">Messages</span>
-          <strong id="syncMessagesStat">0 / 0</strong>
-        </div>
-        <div class="sync-stat">
-          <span class="sync-stat-label" data-i18n="index.sync_saved">Updated</span>
-          <strong id="syncSavedStat">0</strong>
-        </div>
-      </div>
-      <div class="sync-current-box">
-        <div class="sync-current-line">
-          <span class="sync-current-label" data-i18n="index.sync_current_domain">Current domain</span>
-          <strong id="syncCurrentDomain">-</strong>
-        </div>
-        <div class="sync-current-line">
-          <span class="sync-current-label" data-i18n="index.sync_current_channel">Current channel</span>
-          <strong id="syncCurrentChannel">-</strong>
-        </div>
-      </div>
-      <div class="sync-result-box" id="syncResultBox" hidden></div>
     </div>
   </div>
 
@@ -403,6 +401,6 @@
     </div>
   </div>
 
-  <script type="module" src="/static/index.js?v=20260328c"></script>
+  <script type="module" src="/static/index.js?v=20260331h"></script>
 </body>
 </html>

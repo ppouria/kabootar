@@ -7,30 +7,40 @@
   <link rel="icon" type="image/svg+xml" href="/static/kabootar.svg" />
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
   <link rel="manifest" href="/manifest.webmanifest" />
-  <meta name="theme-color" content="#081018" />
+  <meta name="theme-color" content="#0b1524" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Kabootar" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <link rel="stylesheet" href="/static/style.css?v=20260328d" />
-  <link rel="stylesheet" href="/static/settings.css?v=20260331b" />
+  <link rel="stylesheet" href="/static/style.css?v=20260331j" />
+  <link rel="stylesheet" href="/static/settings.css?v=20260331e" />
 </head>
 <body class="settings-page">
   <div class="settings-shell">
     <header class="settings-header">
       <div class="settings-brand">
         <img class="settings-logo" src="/static/kabootar.svg" alt="Kabootar" width="42" height="42" decoding="async" />
-        <div>
-        <h1 class="settings-title" data-i18n="settings.title">Client Settings</h1>
-        <p class="settings-subtitle" data-i18n="settings.subtitle">Manage channels, source mode and DNS/proxy configuration.</p>
+        <div class="settings-brand-copy">
+          <div class="settings-kicker">Kabootar</div>
+          <h1 class="settings-title" data-i18n="settings.title">Client Settings</h1>
+          <p class="settings-subtitle" data-i18n="settings.subtitle">Manage channels, source mode and DNS/proxy configuration.</p>
         </div>
       </div>
       <div class="settings-header-actions">
-        <button class="back-link" type="button" id="langToggle" data-i18n-title="common.change_language" title="Change language">FA</button>
+        <button class="lite-btn settings-toolbar-btn" type="button" id="langToggle" data-i18n-title="common.change_language" title="Change language">
+          <span class="icon-glyph icon-languages" aria-hidden="true"></span>
+          <span class="settings-toolbar-btn-label" id="langToggleLabel">FA</span>
+        </button>
         {% if not settings_locked %}
-        <a href="/debug" class="back-link">Debug</a>
+        <a href="/debug" class="lite-btn settings-toolbar-btn" data-i18n-title="settings.debug_link" title="Debug">
+          <span class="icon-glyph icon-bug" aria-hidden="true"></span>
+          <span data-i18n="settings.debug_link">Debug</span>
+        </a>
         {% endif %}
-        <a href="/" class="back-link" data-i18n="common.back">Back</a>
+        <a href="/" class="lite-btn settings-toolbar-btn settings-toolbar-btn-primary" data-i18n-title="common.back" title="Back">
+          <span class="icon-glyph icon-arrow-left" aria-hidden="true"></span>
+          <span data-i18n="common.back">Back</span>
+        </a>
       </div>
     </header>
 
@@ -43,7 +53,7 @@
       </div>
     </section>
 
-    {% if message %}<div class="msg">{{ message }}</div>{% endif %}
+    <div class="msg" id="settingsFlash" {% if not message %}hidden{% endif %}>{{ message }}</div>
 
     {% if settings_locked %}
     <section class="panel auth-panel">
@@ -93,6 +103,22 @@
           <div class="field">
             <label class="label" for="syncInterval" data-i18n="settings.sync_interval">Sync interval (minutes)</label>
             <input id="syncInterval" class="input" name="sync_interval_minutes" value="{{ settings.sync_interval_minutes }}" inputmode="numeric" />
+          </div>
+
+          <div class="field">
+            <label class="label" for="initialChannelHistoryCount" data-i18n="settings.initial_channel_history_count">Initial channel history (messages)</label>
+            <input
+              id="initialChannelHistoryCount"
+              class="input"
+              type="number"
+              min="1"
+              max="200"
+              step="1"
+              name="initial_channel_history_count"
+              value="{{ settings.initial_channel_history_count }}"
+              inputmode="numeric"
+            />
+            <div class="sub" data-i18n="settings.initial_channel_history_hint">When a brand-new channel is added, Kabootar will try to load this many recent messages first.</div>
           </div>
         </section>
 
@@ -166,7 +192,7 @@
       <input type="hidden" name="dns_client_channels" value="{{ settings.dns_client_channels }}" />
 
       <div class="actions sticky">
-        <button class="btn-primary" type="submit" data-i18n="settings.save_settings">Save settings</button>
+        <button class="btn-primary save-settings-btn" id="saveSettingsBtn" type="submit" data-i18n="settings.save_settings">Save settings</button>
       </div>
     </form>
 
@@ -284,6 +310,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/static/settings.js?v=20260331a"></script>
+  <script type="module" src="/static/settings.js?v=20260331e"></script>
 </body>
 </html>

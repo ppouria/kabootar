@@ -1,0 +1,18 @@
+{% if selected_channel %}
+{% if selected_channel.avatar_b64 %}
+<img class="header-avatar" src="data:{{ selected_channel.avatar_mime or 'image/jpeg' }};base64,{{ selected_channel.avatar_b64 }}" alt="{{ selected_channel.title or selected_channel.username }}" />
+{% elif selected_channel.avatar_url %}
+<img class="header-avatar" src="{{ selected_channel.avatar_url }}" alt="{{ selected_channel.title or selected_channel.username }}" referrerpolicy="no-referrer" />
+{% else %}
+<div class="header-avatar avatar-fallback" aria-hidden="true">{{ ((selected_channel.username or '?')[:2]) | upper }}</div>
+{% endif %}
+<div class="header-meta">
+  <div class="header-title">{{ selected_channel.title or ('@' ~ selected_channel.username) }}</div>
+  <div class="header-sub">{{ selected_channel.source_url }}</div>
+</div>
+{% else %}
+<div class="header-meta">
+  <div class="header-title" data-i18n="index.no_channel_selected">No channel selected</div>
+  <div class="header-sub" data-i18n="index.no_channel_selected_sub">Add a channel to start syncing.</div>
+</div>
+{% endif %}

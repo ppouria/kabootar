@@ -113,6 +113,31 @@ def _direct_media_batch_size() -> int:
     return _direct_batch_size("DIRECT_MEDIA_APPLY_BATCH_SIZE", 2, 1, 10)
 
 
+def _initial_channel_history_count() -> int:
+    raw = (get_setting("initial_channel_history_count", "30") or "30").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 30
+    return max(1, min(200, value))
+
+
+def _channel_recent_target(db, url: str, regular_target: int) -> int:
+    initial_target = _initial_channel_history_count()
+    ch = db.scalar(select(Channel).where(Channel.source_url == url))
+    if not ch:
+        return initial_target
+
+    has_message = db.scalar(
+        select(Message.id)
+        .where(Message.channel_id == ch.id)
+        .limit(1)
+    )
+    if has_message:
+        return regular_target
+    return initial_target
+
+
 def _fetch_photo_items(
     photo_urls: list[str],
     proxies: list[str],
@@ -238,6 +263,7 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                 retry_delay_seconds = int(__import__('os').getenv('RETRY_DELAY_SECONDS', '60'))
                 recent_target = int(__import__('os').getenv('FETCH_RECENT_PER_CHANNEL', '50'))
                 max_photo_bytes = int(__import__('os').getenv('DNS_MEDIA_MAX_BYTES', '180000'))
+                history_target = _channel_recent_target(db, url, recent_target)
 
                 logger.info("sync channel start url=%s attempts=%s timeout=%ss", url, attempts, timeout_seconds)
                 _emit_progress(
@@ -257,17 +283,17 @@ def _sync_once_impl(progress: ProgressCallback = None, force_server_refresh: boo
                     retry_delay_seconds=retry_delay_seconds,
                 )
                 recent = parse_recent_messages(html, limit=100)
-                if len(recent) < recent_target:
+                if len(recent) < history_target:
                     recent = collect_recent_messages(
                         url,
                         proxies,
-                        target_count=recent_target,
+                        target_count=history_target,
                         attempts=attempts,
                         timeout_seconds=timeout_seconds,
                         retry_delay_seconds=retry_delay_seconds,
                     )
                 else:
-                    recent = recent[-recent_target:]
+                    recent = recent[-history_target:]
 
                 if not recent:
                     logger.info("sync channel empty url=%s", url)

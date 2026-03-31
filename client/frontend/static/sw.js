@@ -1,13 +1,20 @@
-const CACHE_NAME = 'kabootar-static-v22';
+const CACHE_NAME = 'kabootar-static-v34';
 const STATIC_ASSETS = [
-  '/static/style.css?v=20260330a',
-  '/static/settings.css?v=20260331b',
-  '/static/index.js?v=20260328c',
-  '/static/settings.js?v=20260331a',
+  '/static/style.css?v=20260331j',
+  '/static/settings.css?v=20260331e',
+  '/static/index.js?v=20260331h',
+  '/static/settings.js?v=20260331e',
   '/static/i18n/en.json',
   '/static/i18n/fa.json',
   '/static/kabootar.svg',
   '/static/t_logo.svg',
+  '/static/vendor/lucide/search.svg',
+  '/static/vendor/lucide/refresh-cw.svg',
+  '/static/vendor/lucide/settings-2.svg',
+  '/static/vendor/lucide/menu.svg',
+  '/static/vendor/lucide/arrow-left.svg',
+  '/static/vendor/lucide/bug.svg',
+  '/static/vendor/lucide/languages.svg',
 ];
 
 self.addEventListener('install', (event) => {

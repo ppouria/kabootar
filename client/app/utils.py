@@ -2,29 +2,74 @@ import base64
 import json
 import re
 from typing import Iterable
+from urllib.parse import parse_qs, urlsplit
+
+_TELEGRAM_HOSTS = {
+    "t.me",
+    "www.t.me",
+    "telegram.me",
+    "www.telegram.me",
+    "telegram.dog",
+    "www.telegram.dog",
+}
+_TELEGRAM_RESERVED_SEGMENTS = {"c", "joinchat", "addlist", "share"}
+
+
+def _clean_tg_username(value: str) -> str:
+    token = (value or "").strip().replace("\\", "/")
+    token = token.lstrip("@").strip().strip("/")
+    token = token.split("?", 1)[0].split("#", 1)[0].strip()
+    if not token:
+        return ""
+    if not re.fullmatch(r"[A-Za-z0-9_]{3,64}", token):
+        return ""
+    return token.lower()
 
 
 def normalize_tg_s_url(value: str) -> str:
-    v = value.strip().lstrip("@")
+    v = (value or "").strip().replace("\\", "/")
     if not v:
         raise ValueError("empty channel value")
 
-    if v.startswith("http://") or v.startswith("https://"):
-        v = v.replace("http://", "https://").rstrip("/")
-        if "/s/" in v:
-            return v
-        if "t.me/" in v:
-            username = v.rsplit("/", 1)[-1]
+    if "://" not in v:
+        broken_scheme = re.match(r"^(https?|tg)(/+)(.+)$", v, flags=re.I)
+        if broken_scheme:
+            v = f"{broken_scheme.group(1)}://{broken_scheme.group(3)}"
+        elif v.startswith("//"):
+            v = f"https:{v}"
+
+    direct = _clean_tg_username(v)
+    if direct:
+        return f"https://t.me/s/{direct}"
+
+    if v.lower().startswith("tg:"):
+        parsed = urlsplit(v)
+        query = parse_qs(parsed.query or "")
+        username = _clean_tg_username((query.get("domain") or [""])[0])
+        if username:
             return f"https://t.me/s/{username}"
+        raise ValueError("unsupported telegram link")
 
-    if "t.me/s/" in v:
-        return ("https://" + v if not v.startswith("http") else v).replace("http://", "https://").rstrip("/")
+    candidate = v if re.match(r"^[a-z][a-z0-9+.-]*://", v, flags=re.I) else f"https://{v.lstrip('/')}"
+    parsed = urlsplit(candidate)
+    host = (parsed.hostname or "").strip().lower()
+    if host not in _TELEGRAM_HOSTS:
+        raise ValueError("unsupported telegram host")
 
-    if "t.me/" in v:
-        username = v.rsplit("/", 1)[-1]
-        return f"https://t.me/s/{username}"
+    parts = [segment for segment in parsed.path.split("/") if segment]
+    if not parts:
+        raise ValueError("missing telegram username")
 
-    return f"https://t.me/s/{v}".rstrip("/")
+    if parts[0].lower() == "s" and len(parts) > 1:
+        username = _clean_tg_username(parts[1])
+    elif parts[0].lower() in _TELEGRAM_RESERVED_SEGMENTS:
+        username = ""
+    else:
+        username = _clean_tg_username(parts[0])
+
+    if not username:
+        raise ValueError("invalid telegram username")
+    return f"https://t.me/s/{username}"
 
 
 def parse_csv(value: str) -> list[str]:

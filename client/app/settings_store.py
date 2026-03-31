@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Any
+from typing import Any, Mapping
 
 from sqlalchemy import text
 
@@ -30,6 +30,7 @@ DEFAULTS: dict[str, str] = {
     "dns_port": "5533",
     "dns_sources": "",
     "sync_interval_minutes": "1",
+    "initial_channel_history_count": "30",
     "settings_password_hash": "",
     "app_password_hash": "",
     "app_auth_ttl_days": "7",
@@ -82,6 +83,21 @@ def set_setting(key: str, value: Any) -> None:
             ),
             {"k": key, "v": str(value)},
         )
+
+
+def set_settings_bulk(values: Mapping[str, Any]) -> None:
+    if not values:
+        return
+    ensure_table()
+    stmt = text(
+        """
+        INSERT INTO app_settings(key,value) VALUES (:k,:v)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+        """
+    )
+    with engine.begin() as conn:
+        for key, value in values.items():
+            conn.execute(stmt, {"k": key, "v": str(value)})
 
 
 def all_settings() -> dict[str, str]:

@@ -36,7 +36,7 @@ from app.dns_bridge import export_resolver_health, probe_dns_domain, push_channe
 from app.models import Channel, Message
 from app.runtime_debug import record_event, runtime_summary, setup_logging, snapshot_events, tail_log_lines
 from app.service import sync_once
-from app.settings_store import all_settings, apply_sync_cron, get_setting, set_setting
+from app.settings_store import all_settings, apply_sync_cron, get_setting, set_setting, set_settings_bulk
 from app.utils import normalize_tg_s_url, parse_csv
 from app.versioning import app_meta
 
@@ -431,6 +431,15 @@ def _app_auth_ttl_days() -> int:
     return max(1, min(365, value))
 
 
+def _initial_channel_history_count() -> int:
+    raw = (get_setting("initial_channel_history_count", "30") or "30").strip()
+    try:
+        value = int(raw)
+    except Exception:
+        value = 30
+    return max(1, min(200, value))
+
+
 def _app_password_sig(password_hash: str) -> str:
     return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:24]
 
@@ -720,7 +729,37 @@ def _looks_like_channel_token(token: str) -> bool:
     t = (token or "").strip().lower()
     if not t:
         return False
-    return t.startswith("@") or t.startswith("http://") or t.startswith("https://") or ("t.me" in t)
+    return (
+        t.startswith("@")
+        or t.startswith("http://")
+        or t.startswith("https://")
+        or t.startswith("tg://")
+        or ("t.me" in t)
+        or ("telegram.me" in t)
+    )
+
+
+def _normalize_domain_host(value: str) -> str:
+    token = (value or "").strip().replace("\\", "/")
+    if not token:
+        return ""
+
+    if "://" not in token:
+        broken_scheme = re.match(r"^(https?|wss?)(/+)(.+)$", token, flags=re.I)
+        if broken_scheme:
+            token = f"{broken_scheme.group(1)}://{broken_scheme.group(3)}"
+
+    token = re.sub(r"^[a-z][a-z0-9+.-]*://", "", token, count=1, flags=re.I).lstrip("/")
+    token = token.split("/", 1)[0].split("?", 1)[0].split("#", 1)[0].strip().rstrip(".").lower()
+    if token.startswith("[") and "]" in token:
+        token = token[1 : token.find("]")]
+    elif token.count(":") == 1:
+        host, port = token.rsplit(":", 1)
+        if port.isdigit():
+            token = host.strip()
+    if not token or not re.fullmatch(r"[a-z0-9.-]+", token):
+        return ""
+    return token
 
 
 def _normalize_dns_domain_line(raw: str) -> str:
@@ -749,7 +788,7 @@ def _normalize_dns_domain_line(raw: str) -> str:
             domain_part = first
             password_part = "|".join(parts[1:]).strip() if len(parts) >= 2 else ""
 
-    domain_norm = domain_part.rstrip(".").lower()
+    domain_norm = _normalize_domain_host(domain_part)
     if not domain_norm:
         return ""
     return f"{domain_norm}|{password_part}" if password_part else domain_norm
@@ -795,6 +834,86 @@ def _save_domain_health(domain: str, status: dict) -> None:
         items.sort(key=lambda kv: int((kv[1] or {}).get("last_seen", 0)), reverse=True)
         data = dict(items[:200])
     set_setting("dns_domain_health", json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+
+
+def _request_prefers_json() -> bool:
+    if (request.headers.get("X-Kabootar-Request") or "").strip().lower() == "fetch":
+        return True
+    accept = (request.headers.get("Accept") or "").lower()
+    return "application/json" in accept
+
+
+def _dedupe_display_messages(messages: list[Message]) -> list[Message]:
+    deduped: list[Message] = []
+    prev_text_key = None
+    for msg in messages:
+        text_key = " ".join((msg.text or "").split())
+        if text_key and not msg.has_media and not msg.photo_items and text_key == prev_text_key:
+            continue
+        deduped.append(msg)
+        prev_text_key = text_key if text_key and not msg.has_media and not msg.photo_items else None
+    return deduped
+
+
+def _load_index_state(selected: str | None, prefer_picker: bool, app_settings: dict[str, str]) -> dict[str, object]:
+    source_mode = _normalize_source_mode(app_settings.get("source_mode"))
+    dns_domain_lines = _load_dns_domain_lines(app_settings.get("dns_domains"))
+    configured_channels = _normalize_channel_list(app_settings.get("direct_channels", "") or "")
+    configured_set = set(configured_channels)
+    configured_order = {url: i for i, url in enumerate(configured_channels)}
+
+    with SessionLocal() as db:
+        if configured_channels:
+            if _ensure_channel_rows(db, configured_channels):
+                db.commit()
+            channels = db.scalars(
+                select(Channel).where(Channel.source_url.in_(configured_channels))
+            ).all()
+            channels = sorted(
+                channels,
+                key=lambda c: (
+                    configured_order.get(c.source_url, 10_000),
+                    c.username.lower(),
+                ),
+            )
+        else:
+            channels = db.scalars(select(Channel).order_by(Channel.username.asc())).all()
+
+        selected_url = selected
+        if not selected_url and channels and not prefer_picker:
+            selected_url = channels[0].source_url
+        elif selected_url and configured_channels and selected_url not in configured_set:
+            selected_url = None if prefer_picker else (channels[0].source_url if channels else None)
+
+        selected_channel = None
+        if selected_url:
+            selected_channel = db.scalar(select(Channel).where(Channel.source_url == selected_url))
+
+        latest_rows = db.execute(
+            select(Message.channel_id, func.max(Message.message_id)).group_by(Message.channel_id)
+        ).all()
+        latest_by_channel = {row[0]: (row[1] or 0) for row in latest_rows}
+
+        messages: list[Message] = []
+        if selected_channel:
+            messages = db.scalars(
+                select(Message)
+                .where(Message.channel_id == selected_channel.id)
+                .order_by(Message.message_id.desc())
+                .limit(120)
+            ).all()
+            messages = list(reversed(messages))
+            messages = _dedupe_display_messages(messages)
+
+    return {
+        "channels": channels,
+        "selected": selected_url,
+        "selected_channel": selected_channel,
+        "messages": messages,
+        "latest_by_channel": latest_by_channel,
+        "source_mode": source_mode,
+        "dns_domains_count": len(dns_domain_lines),
+    }
 
 
 def _resolve_frontend_dirs() -> tuple[Path, Path]:
@@ -954,7 +1073,7 @@ def create_app() -> Flask:
             )
         if request.path.startswith("/static/"):
             resp.headers["Cache-Control"] = "public, max-age=86400, immutable"
-        elif request.path in {"/", "/settings", "/debug", "/debug/state"}:
+        elif request.path in {"/", "/settings", "/debug", "/debug/state", "/channel/state"}:
             resp.headers["Cache-Control"] = "no-cache"
         resp.headers["X-Kabootar-Version"] = meta.version_name
         resp.headers["X-Kabootar-Version-Code"] = str(meta.version_code)
@@ -1149,30 +1268,14 @@ def create_app() -> Flask:
     @app.post("/settings")
     def settings_save():
         if not _settings_unlocked():
-            return redirect(url_for("settings_page", msg="Settings are locked. Enter password."))
+            message = "Settings are locked. Enter password."
+            if _request_prefers_json():
+                return jsonify({"ok": False, "message": message}), 403
+            return redirect(url_for("settings_page", msg=message))
 
         source_mode = _normalize_source_mode(request.form.get("source_mode"))
-        set_setting("source_mode", source_mode)
-
         channels = _normalize_channel_list(request.form.get("direct_channels"))
         channels_csv = ",".join(channels)
-        set_setting("direct_channels", channels_csv)
-        # keep legacy key in sync for backward compatibility
-        set_setting("dns_client_channels", channels_csv)
-
-        fields = [
-            "direct_proxies",
-            "dns_password",
-            "dns_client_id",
-            "dns_resolvers",
-            "dns_domains",
-            "dns_query_size",
-            "dns_timeout_seconds",
-            "sync_interval_minutes",
-        ]
-        for f in fields:
-            if f in request.form:
-                set_setting(f, request.form.get(f, ""))
 
         # Canonicalize resolver list (one per line: resolver or resolver:port).
         resolver_lines: list[str] = []
@@ -1181,7 +1284,7 @@ def create_app() -> Flask:
             if normalized:
                 resolver_lines.append(normalized)
         resolver_lines = list(dict.fromkeys(resolver_lines))
-        set_setting("dns_resolvers", "\n".join(resolver_lines))
+        resolvers_raw = "\n".join(resolver_lines)
 
         domain_lines: list[str] = []
         for raw in (request.form.get("dns_domains", "") or "").splitlines():
@@ -1191,29 +1294,74 @@ def create_app() -> Flask:
         # de-duplicate while preserving order
         domain_lines = list(dict.fromkeys(domain_lines))
         domains_raw = "\n".join(domain_lines)
-        set_setting("dns_domains", domains_raw)
-        # Clear old route-based storage from active flow.
-        set_setting("dns_channel_routes", "")
-        # "Default domain/source" is removed from UI and active flow.
-        set_setting("dns_domain", "")
-        set_setting("dns_sources", "")
+        sync_interval_raw = request.form.get("sync_interval_minutes", "1") or "1"
+        try:
+            sync_interval_minutes = int(sync_interval_raw)
+        except Exception:
+            sync_interval_minutes = 1
+        initial_history_raw = request.form.get("initial_channel_history_count", "30") or "30"
+        try:
+            initial_history_count = int(initial_history_raw)
+        except Exception:
+            initial_history_count = 30
+        initial_history_count = max(1, min(200, initial_history_count))
 
-        set_setting("dns_use_system_resolver", "1" if request.form.get("dns_use_system_resolver") == "1" else "0")
+        set_settings_bulk(
+            {
+                "source_mode": source_mode,
+                "direct_channels": channels_csv,
+                "dns_client_channels": channels_csv,
+                "direct_proxies": request.form.get("direct_proxies", ""),
+                "dns_password": request.form.get("dns_password", ""),
+                "dns_client_id": request.form.get("dns_client_id", ""),
+                "dns_resolvers": resolvers_raw,
+                "dns_domains": domains_raw,
+                "dns_query_size": request.form.get("dns_query_size", ""),
+                "dns_timeout_seconds": request.form.get("dns_timeout_seconds", ""),
+                "sync_interval_minutes": sync_interval_raw,
+                "initial_channel_history_count": str(initial_history_count),
+                "dns_channel_routes": "",
+                "dns_domain": "",
+                "dns_sources": "",
+                "dns_use_system_resolver": "1" if request.form.get("dns_use_system_resolver") == "1" else "0",
+            }
+        )
 
-        ok, out = apply_sync_cron(int(request.form.get("sync_interval_minutes", "1") or "1"))
+        ok, out = apply_sync_cron(sync_interval_minutes)
 
-        push_msg = ""
-        if source_mode == "dns" and channels and domains_raw.strip():
-            try:
-                pushed = push_channels_to_domains(channels, domain_text=domains_raw)
-                bad = [r for r in pushed.get("results", []) if not r.get("ok")]
-                push_msg = "dns-push=ok" if not bad else f"dns-push=partial({len(bad)} failed)"
-            except Exception as exc:
-                push_msg = f"dns-push=error:{exc}"
+        push_queued = source_mode == "dns" and bool(channels) and bool(domains_raw.strip())
+        if push_queued:
+            def _push_channels_background(channels_copy: list[str], domains_copy: str) -> None:
+                try:
+                    pushed = push_channels_to_domains(channels_copy, domain_text=domains_copy)
+                    bad = [r for r in pushed.get("results", []) if not r.get("ok")]
+                    record_event(
+                        "settings_dns_push_background",
+                        ok=not bad,
+                        failed=len(bad),
+                        channels=len(channels_copy),
+                    )
+                except Exception as exc:
+                    record_event(
+                        "settings_dns_push_background",
+                        level="warning",
+                        ok=False,
+                        channels=len(channels_copy),
+                        error=str(exc),
+                    )
+
+            threading.Thread(
+                target=_push_channels_background,
+                args=(list(channels), domains_raw),
+                daemon=True,
+            ).start()
 
         msg = "saved" if ok else f"saved (cron warning: {out})"
-        if push_msg:
-            msg = f"{msg}; {push_msg}"
+        if push_queued:
+            msg = f"{msg}; dns-push=queued"
+
+        if _request_prefers_json():
+            return jsonify({"ok": True, "message": msg, "push_queued": push_queued, "cron_ok": ok, "cron_message": out})
         return redirect(url_for("settings_page", msg=msg))
 
     @app.post("/dns/domain/check")
@@ -1286,10 +1434,42 @@ def create_app() -> Flask:
                 return jsonify({"ok": False, "error": "not_found"}), 404
             return jsonify({"ok": True, "job": _sync_job_public(job)})
 
+    @app.get("/channel/state")
+    def channel_state():
+        selected = (request.args.get("channel") or "").strip() or None
+        app_settings = all_settings()
+        state = _load_index_state(selected, prefer_picker=False, app_settings=app_settings)
+        selected_channel = state["selected_channel"]
+        messages = state["messages"]
+        latest_by_channel = state["latest_by_channel"]
+        latest_id = 0
+        if selected_channel:
+            latest_id = int(latest_by_channel.get(selected_channel.id, 0) or 0)
+        return jsonify(
+            {
+                "ok": True,
+                "selected": state["selected"] or "",
+                "latest_id": latest_id,
+                "message_count": len(messages),
+                "search_disabled": not selected_channel or not messages,
+                "header_html": render_template(
+                    "_chat_header_primary.html",
+                    selected_channel=selected_channel,
+                ),
+                "messages_html": render_template(
+                    "_messages_panel.html",
+                    channels=state["channels"],
+                    messages=messages,
+                    source_mode=state["source_mode"],
+                    dns_domains_count=state["dns_domains_count"],
+                ),
+            }
+        )
+
     @app.post('/channel/add')
     def add_channel():
         channels = _normalize_channel_list(request.form.get('channel') or '')
-        domain = (request.form.get('domain') or '').strip().rstrip('.').lower()
+        domain = _normalize_domain_host(request.form.get('domain') or '')
         password = (request.form.get('password') or '').strip()
         mode = _normalize_source_mode(get_setting("source_mode", "dns"))
         if not channels:
@@ -1353,7 +1533,7 @@ def create_app() -> Flask:
         if channels or mode == "dns":
             def _run_sync_once() -> None:
                 try:
-                    sync_once()
+                    sync_once(force_server_refresh=(mode == "dns"), priority_channel=(channels[0] if channels else ""))
                 except Exception:
                     pass
 
@@ -1370,7 +1550,7 @@ def create_app() -> Flask:
 
     @app.post("/domain/add")
     def add_domain():
-        domain = (request.form.get("domain") or "").strip().rstrip(".").lower()
+        domain = _normalize_domain_host(request.form.get("domain") or "")
         password = (request.form.get("password") or "").strip()
         entry = _normalize_dns_domain_line(f"{domain}|{password}" if password else domain)
         if not entry:
@@ -1389,78 +1569,18 @@ def create_app() -> Flask:
         prefer_picker = _request_prefers_channel_picker()
         ui_msg = request.args.get("msg", "")
         app_settings = all_settings()
-        source_mode = _normalize_source_mode(app_settings.get("source_mode"))
-        dns_domain_lines = _load_dns_domain_lines(app_settings.get("dns_domains"))
-        configured_channels = _normalize_channel_list(app_settings.get("direct_channels", "") or "")
-        configured_set = set(configured_channels)
-        configured_order = {url: i for i, url in enumerate(configured_channels)}
-
-        with SessionLocal() as db:
-            # If channels are configured in settings, they are the source of truth
-            # for sidebar visibility/order. If empty (domain-only DNS mode), fall
-            # back to DB-discovered channels.
-            if configured_channels:
-                if _ensure_channel_rows(db, configured_channels):
-                    db.commit()
-                channels = db.scalars(
-                    select(Channel).where(Channel.source_url.in_(configured_channels))
-                ).all()
-                channels = sorted(
-                    channels,
-                    key=lambda c: (
-                        configured_order.get(c.source_url, 10_000),
-                        c.username.lower(),
-                    ),
-                )
-            else:
-                channels = db.scalars(select(Channel).order_by(Channel.username.asc())).all()
-
-            if not selected and channels and not prefer_picker:
-                selected = channels[0].source_url
-            elif selected and configured_channels and selected not in configured_set:
-                selected = None if prefer_picker else (channels[0].source_url if channels else None)
-
-            selected_channel = None
-            if selected:
-                selected_channel = db.scalar(select(Channel).where(Channel.source_url == selected))
-
-            latest_rows = db.execute(
-                select(Message.channel_id, func.max(Message.message_id)).group_by(Message.channel_id)
-            ).all()
-            latest_by_channel = {row[0]: (row[1] or 0) for row in latest_rows}
-
-            msgs = []
-            if selected_channel:
-                msgs = db.scalars(
-                    select(Message)
-                    .where(Message.channel_id == selected_channel.id)
-                    .order_by(Message.message_id.desc())
-                    .limit(120)
-                ).all()
-                msgs = list(reversed(msgs))
-
-                # De-duplicate visually repeated posts (same normalized text in sequence)
-                deduped = []
-                prev_text_key = None
-                for m in msgs:
-                    text_key = " ".join((m.text or "").split())
-                    # Skip only repeated pure-text duplicates; keep media posts.
-                    if text_key and not m.has_media and not m.photo_items and text_key == prev_text_key:
-                        continue
-                    deduped.append(m)
-                    prev_text_key = text_key if text_key and not m.has_media and not m.photo_items else None
-                msgs = deduped
+        state = _load_index_state(selected, prefer_picker, app_settings)
 
         return render_template(
             "index.html",
-            channels=channels,
-            selected=selected,
-            selected_channel=selected_channel,
-            messages=msgs,
-            latest_by_channel=latest_by_channel,
+            channels=state["channels"],
+            selected=state["selected"],
+            selected_channel=state["selected_channel"],
+            messages=state["messages"],
+            latest_by_channel=state["latest_by_channel"],
             app_settings=app_settings,
-            source_mode=source_mode,
-            dns_domains_count=len(dns_domain_lines),
+            source_mode=state["source_mode"],
+            dns_domains_count=state["dns_domains_count"],
             ui_msg=ui_msg,
         )
 

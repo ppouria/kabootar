@@ -7,6 +7,7 @@ class SettingsView {
         this.querySizeInput = document.getElementById('dnsQuerySize');
         this.dnsTimeoutInput = document.getElementById('dnsTimeoutSeconds');
         this.syncInput = document.getElementById('syncInterval');
+        this.initialChannelHistoryInput = document.getElementById('initialChannelHistoryCount');
         this.directChannelsHidden = document.getElementById('direct_channels');
         this.dnsClientChannelsHidden = document.getElementById('dns_client_channels');
         this.directProxiesHidden = document.getElementById('direct_proxies');
@@ -27,10 +28,13 @@ class SettingsView {
         this.domainHealthPayload = document.getElementById('domainHealthPayload');
         this.domainHealthClose = document.getElementById('domainHealthClose');
         this.form = document.getElementById('settingsForm');
+        this.saveSettingsBtn = document.getElementById('saveSettingsBtn');
+        this.settingsFlash = document.getElementById('settingsFlash');
         this.LANG_KEY = 'kabootar_lang';
         this.lang = 'fa';
         this.i18n = {};
         this.domainLastStatus = new WeakMap();
+        this.saveButtonResetTimer = null;
     }
     t(key, fallback = '') {
         return this.i18n[key] || fallback || key;
@@ -62,10 +66,77 @@ class SettingsView {
         });
     }
     updateLangToggleLabel() {
+        const label = document.getElementById('langToggleLabel');
+        if (label) {
+            label.textContent = this.lang === 'fa' ? 'EN' : 'FA';
+            return;
+        }
         const btn = document.getElementById('langToggle');
         if (!btn)
             return;
         btn.textContent = this.lang === 'fa' ? 'EN' : 'FA';
+    }
+    clearSaveButtonResetTimer() {
+        if (this.saveButtonResetTimer != null) {
+            window.clearTimeout(this.saveButtonResetTimer);
+            this.saveButtonResetTimer = null;
+        }
+    }
+    saveButtonIcon(state) {
+        if (state === 'loading') {
+            return '<span class="save-btn-icon"><span class="save-btn-spinner" aria-hidden="true"></span></span>';
+        }
+        if (state === 'success') {
+            return `
+        <span class="save-btn-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M5 12.5L9.2 16.5L19 7.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+      `;
+        }
+        if (state === 'error') {
+            return `
+        <span class="save-btn-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none">
+            <path d="M12 8V13" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"></path>
+            <circle cx="12" cy="17" r="1.3" fill="currentColor"></circle>
+            <path d="M12 3.8L21 19.4C21.3 19.9 20.9 20.5 20.3 20.5H3.7C3.1 20.5 2.7 19.9 3 19.4L12 3.8Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"></path>
+          </svg>
+        </span>
+      `;
+        }
+        return '';
+    }
+    renderSaveButton(state) {
+        if (!this.saveSettingsBtn)
+            return;
+        const label = state === 'loading'
+            ? this.t('settings.saving_settings', 'Saving...')
+            : state === 'success'
+                ? this.t('settings.saved_settings', 'Saved')
+                : state === 'error'
+                    ? this.t('settings.save_failed', 'Save failed')
+                    : this.t('settings.save_settings', 'Save settings');
+        this.saveSettingsBtn.disabled = state === 'loading';
+        this.saveSettingsBtn.classList.toggle('is-loading', state === 'loading');
+        this.saveSettingsBtn.classList.toggle('is-success', state === 'success');
+        this.saveSettingsBtn.classList.toggle('is-error', state === 'error');
+        this.saveSettingsBtn.innerHTML = `<span class="save-btn-content">${this.saveButtonIcon(state)}<span class="save-btn-label">${label}</span></span>`;
+    }
+    showFlash(message, tone = 'success') {
+        if (!this.settingsFlash)
+            return;
+        const clean = String(message || '').trim();
+        if (!clean) {
+            this.settingsFlash.hidden = true;
+            this.settingsFlash.textContent = '';
+            this.settingsFlash.removeAttribute('data-tone');
+            return;
+        }
+        this.settingsFlash.hidden = false;
+        this.settingsFlash.dataset.tone = tone;
+        this.settingsFlash.textContent = clean;
     }
     async initI18n() {
         const saved = (localStorage.getItem(this.LANG_KEY) || '').toLowerCase();
@@ -78,7 +149,7 @@ class SettingsView {
             this.i18n = await this.loadLang('en');
         }
         document.documentElement.lang = this.lang;
-        document.documentElement.dir = this.lang === 'fa' ? 'rtl' : 'ltr';
+        document.documentElement.dir = 'ltr';
         this.applyI18n();
         this.updateLangToggleLabel();
         const btn = document.getElementById('langToggle');
@@ -200,6 +271,42 @@ class SettingsView {
         }
         catch (err) {
             return { ok: false, error: String(err || 'network_error') };
+        }
+    }
+    async submitSettingsForm() {
+        if (!this.form)
+            return;
+        this.serializeToHidden();
+        this.clearSaveButtonResetTimer();
+        this.renderSaveButton('loading');
+        const action = this.form.getAttribute('action') || window.location.pathname || '/settings';
+        const payload = new FormData(this.form);
+        try {
+            const response = await fetch(action, {
+                method: 'POST',
+                body: payload,
+                cache: 'no-store',
+                headers: {
+                    Accept: 'application/json',
+                    'X-Kabootar-Request': 'fetch',
+                },
+            });
+            const data = (await response.json().catch(() => ({})));
+            const ok = response.ok && data.ok !== false;
+            const message = String(data.message || this.t(ok ? 'settings.saved_settings' : 'settings.save_failed', ok ? 'Saved' : 'Save failed'));
+            this.showFlash(message, ok ? 'success' : 'error');
+            this.renderSaveButton(ok ? 'success' : 'error');
+            this.saveButtonResetTimer = window.setTimeout(() => {
+                this.renderSaveButton('idle');
+            }, ok ? 2200 : 2600);
+        }
+        catch (err) {
+            const message = String(err || this.t('settings.save_failed', 'Save failed'));
+            this.showFlash(message, 'error');
+            this.renderSaveButton('error');
+            this.saveButtonResetTimer = window.setTimeout(() => {
+                this.renderSaveButton('idle');
+            }, 2600);
         }
     }
     statusSummary(domain, status) {
@@ -569,6 +676,7 @@ class SettingsView {
         await this.initI18n();
         if (!this.form)
             return;
+        this.renderSaveButton('idle');
         this.hydrateFromHidden();
         this.setupSortable();
         this.bindModeSwitch();
@@ -592,10 +700,15 @@ class SettingsView {
         this.dnsTimeoutInput?.addEventListener('blur', () => this.clampNumberField(this.dnsTimeoutInput, 1, 30));
         this.syncInput?.addEventListener('change', () => this.clampNumberField(this.syncInput, 1, 59));
         this.syncInput?.addEventListener('blur', () => this.clampNumberField(this.syncInput, 1, 59));
+        this.initialChannelHistoryInput?.addEventListener('change', () => this.clampNumberField(this.initialChannelHistoryInput, 1, 200));
+        this.initialChannelHistoryInput?.addEventListener('blur', () => this.clampNumberField(this.initialChannelHistoryInput, 1, 200));
         this.sourceMode?.addEventListener('change', () => this.toggleSections());
         this.toggleSections();
         await this.hydrateDomainHealthBadges();
-        this.form?.addEventListener('submit', () => this.serializeToHidden());
+        this.form.addEventListener('submit', (event) => {
+            event.preventDefault();
+            void this.submitSettingsForm();
+        });
     }
 }
 window.addEventListener('DOMContentLoaded', () => {

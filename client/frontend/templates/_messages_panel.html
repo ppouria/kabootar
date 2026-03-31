@@ -1,0 +1,100 @@
+{% if not channels %}
+<div class="empty-state">
+  <h3 data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_title_domain_first{% else %}index.empty_title{% endif %}">
+    {% if source_mode == 'dns' and dns_domains_count == 0 %}
+    Start by adding a domain
+    {% else %}
+    Start by adding a channel
+    {% endif %}
+  </h3>
+  <p data-i18n="{% if source_mode == 'dns' and dns_domains_count == 0 %}index.empty_desc_domain_first{% else %}index.empty_desc{% endif %}">
+    {% if source_mode == 'dns' and dns_domains_count == 0 %}
+    In DNS mode, add a domain first and then add channels.
+    {% else %}
+    Paste @username or https://t.me/username.
+    {% endif %}
+  </p>
+  <div class="empty-actions">
+    {% if source_mode == 'dns' %}
+    <button type="button" class="lite-btn add-domain-btn" id="addDomainBtnMain" data-i18n="index.add_domain">+ Add Domain</button>
+    {% endif %}
+    <button
+      type="button"
+      class="lite-btn add-channel-btn"
+      id="addChannelBtnMain"
+      data-i18n="index.add_channel"
+      {% if source_mode == 'dns' and dns_domains_count == 0 %}disabled{% endif %}
+    >+ Add Channel</button>
+  </div>
+</div>
+{% endif %}
+{% for m in messages %}
+<div class="msg" id="msg-{{ m.message_id }}" data-message-id="{{ m.message_id }}">
+  {% set photo_items = m.photo_items %}
+  {% set has_photo_payload = photo_items or m.photo_b64 or m.photos_json %}
+  {% set media_kind = ((m.media_kind or ('photo' if has_photo_payload else '')) | lower) %}
+  {% if m.forward_source %}
+  <div class="forward-block">
+    <span class="forward-label" data-i18n="index.forwarded_from">Forwarded from</span>
+    <span class="forward-source" dir="auto">{{ m.forward_source }}</span>
+  </div>
+  {% endif %}
+  {% set has_unsupported_media = m.has_media and media_kind not in ('', 'photo') and not has_photo_payload %}
+  {% if has_unsupported_media %}
+  <div class="unsupported-media-note">
+    <div class="unsupported-media-title" data-i18n="index.unsupported_media_title">Unsupported media</div>
+    <div
+      class="unsupported-media-copy"
+      data-media-kind="{{ media_kind or 'media' }}"
+      dir="auto"
+    >{{ m.unsupported_media_notice or 'This message contains unsupported media.' }}</div>
+  </div>
+  {% endif %}
+  {% if m.reply_to_message_id or m.reply_author or m.reply_text %}
+  {% if m.reply_to_message_id %}
+  <a class="reply-block" href="#msg-{{ m.reply_to_message_id }}">
+    <div class="reply-head">
+      <span class="reply-author">{{ m.reply_author or 'Reply' }}</span>
+      <span class="reply-id">#{{ m.reply_to_message_id }}</span>
+    </div>
+    <div class="reply-text" dir="auto">{{ m.reply_text or '...' }}</div>
+  </a>
+  {% else %}
+  <div class="reply-block">
+    <div class="reply-head">
+      <span class="reply-author">{{ m.reply_author or 'Reply' }}</span>
+    </div>
+    <div class="reply-text" dir="auto">{{ m.reply_text or '...' }}</div>
+  </div>
+  {% endif %}
+  {% endif %}
+  {% if photo_items %}
+  <div class="msg-photo-wrap{% if (photo_items | length) > 1 %} multi-photo-wrap{% endif %}">
+    <div class="msg-photo-grid" data-count="{{ photo_items | length }}">
+      {% for photo in photo_items %}
+      <img
+        class="msg-photo"
+        src="data:{{ photo.mime or 'image/jpeg' }};base64,{{ photo.b64 }}"
+        alt="photo {{ loop.index }} of {{ photo_items | length }} #{{ m.message_id }}"
+        loading="lazy"
+      />
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+  {% if m.text %}
+  {% if has_unsupported_media %}
+  <div class="caption-block">
+    <div class="caption-label" data-i18n="index.caption_label">Caption</div>
+    <div class="text caption-text" dir="auto">{{ m.text }}</div>
+  </div>
+  {% else %}
+  <div class="text" dir="auto">{{ m.text }}</div>
+  {% endif %}
+  {% endif %}
+  <div class="meta">
+    <span>#{{ m.message_id }}</span>
+    <span class="time" data-iso="{{ m.published_at }}">{{ m.published_at }}</span>
+  </div>
+</div>
+{% endfor %}

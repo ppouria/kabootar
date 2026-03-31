@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import logging
+import os
 import re
 import secrets
 import socket
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import dns.resolver
-from dnslib import QTYPE, RCODE, RR, TXT
+from dnslib import QTYPE, RCODE, RR, TXT, DNSRecord
 from dnslib.server import BaseResolver, DNSServer
 from sqlalchemy import select
 
@@ -834,6 +835,10 @@ def _ordered_resolvers(targets: list[DnsResolverTarget]) -> list[DnsResolverTarg
     return sorted(dedup.values(), key=_resolver_score)
 
 
+def _is_android_runtime() -> bool:
+    return (os.getenv("KABOOTAR_PLATFORM", "") or "").strip().lower() == "android"
+
+
 def _resolver_for_target(target: DnsResolverTarget) -> dns.resolver.Resolver:
     timeout_seconds = _dns_timeout_seconds()
     lifetime_seconds = min(60.0, max(timeout_seconds + 1.6, timeout_seconds * 1.9))
@@ -876,15 +881,57 @@ def _txt_answer_bytes(ans) -> list[bytes]:
     return out
 
 
+def _txt_answer_bytes_from_wire(packet: bytes) -> list[bytes]:
+    record = DNSRecord.parse(packet)
+    rcode = int(getattr(record.header, "rcode", 0) or 0)
+    if rcode == RCODE.NXDOMAIN:
+        raise dns.resolver.NXDOMAIN
+    if rcode != RCODE.NOERROR:
+        raise RuntimeError(f"android_system_dns_rcode:{rcode}")
+
+    out: list[bytes] = []
+    for rr in getattr(record, "rr", []) or []:
+        if int(getattr(rr, "rtype", 0) or 0) != QTYPE.TXT:
+            continue
+        data = getattr(getattr(rr, "rdata", None), "data", None) or []
+        if data:
+            out.append(b"".join(data))
+    if out:
+        return out
+    raise RuntimeError("android_system_dns_no_txt")
+
+
+def _query_txt_via_android_system(name: str) -> list[bytes]:
+    try:
+        from java import jclass
+    except Exception as exc:  # pragma: no cover - only on Android runtime
+        raise RuntimeError("android_system_dns_java_bridge_unavailable") from exc
+
+    helper = jclass("com.kabootar.client.AndroidDnsHelper")
+    timeout_ms = int(max(1000.0, min(30000.0, _dns_timeout_seconds() * 1000.0)))
+    query = DNSRecord.question(name, qtype="TXT").pack()
+    try:
+        answer = helper.rawQuerySystem(query, timeout_ms)
+        packet = bytes(answer)
+    except Exception as exc:  # pragma: no cover - only on Android runtime
+        text = str(exc or "").strip()
+        if "rcode=3" in text.lower():
+            raise dns.resolver.NXDOMAIN from exc
+        raise RuntimeError(f"android_system_dns_failed:{text or exc.__class__.__name__}") from exc
+    if not packet:
+        raise RuntimeError("android_system_dns_empty")
+    return _txt_answer_bytes_from_wire(packet)
+
+
 def _is_windows_dns_permission_error(exc: Exception) -> bool:
-    if __import__("os").name != "nt":
+    if os.name != "nt":
         return False
     text = str(exc or "").lower()
     return "10013" in text or "access permissions" in text or isinstance(exc, PermissionError)
 
 
 def _query_txt_via_nslookup(name: str, target: DnsResolverTarget) -> list[bytes]:
-    if __import__("os").name != "nt":
+    if os.name != "nt":
         raise RuntimeError("nslookup_fallback_not_supported")
     if not target.use_system and int(target.port or 53) != 53:
         raise RuntimeError("nslookup_fallback_requires_port_53")
@@ -925,12 +972,12 @@ def _query_txt_via_nslookup(name: str, target: DnsResolverTarget) -> list[bytes]
 
 
 def _supports_windows_nslookup(target: DnsResolverTarget) -> bool:
-    return __import__("os").name == "nt" and (target.use_system or int(target.port or 53) == 53)
+    return os.name == "nt" and (target.use_system or int(target.port or 53) == 53)
 
 
 def _public_fallback_resolvers(targets: list[DnsResolverTarget]) -> list[DnsResolverTarget]:
     extras: list[DnsResolverTarget] = []
-    if __import__("os").name == "nt":
+    if os.name == "nt":
         extras.extend(
             [
                 DnsResolverTarget(server="1.1.1.1", port=53, use_system=False),
@@ -946,6 +993,35 @@ def _public_fallback_resolvers(targets: list[DnsResolverTarget]) -> list[DnsReso
 
 def _query_txt_single(name: str, target: DnsResolverTarget, retries: int | None = None) -> list[bytes]:
     tries = retries if retries is not None else _query_retry_count()
+    if target.use_system and _is_android_runtime():
+        start_android = time.perf_counter()
+        try:
+            out = _query_txt_via_android_system(name)
+            _record_resolver_result(target, True, time.perf_counter() - start_android)
+            return out
+        except dns.resolver.NXDOMAIN:
+            _record_resolver_result(target, False, time.perf_counter() - start_android)
+            raise
+        except Exception as exc:
+            last_exc: Exception | None = exc
+            _record_resolver_result(target, False, time.perf_counter() - start_android)
+            if tries <= 1:
+                raise
+            for attempt in range(1, max(1, tries)):
+                time.sleep(0.12 * attempt)
+                start_android = time.perf_counter()
+                try:
+                    out = _query_txt_via_android_system(name)
+                    _record_resolver_result(target, True, time.perf_counter() - start_android)
+                    return out
+                except dns.resolver.NXDOMAIN:
+                    _record_resolver_result(target, False, time.perf_counter() - start_android)
+                    raise
+                except Exception as retry_exc:
+                    last_exc = retry_exc
+                    _record_resolver_result(target, False, time.perf_counter() - start_android)
+            raise last_exc
+
     if _supports_windows_nslookup(target):
         tries = 1
     last_exc: Exception | None = None
@@ -1044,7 +1120,7 @@ def _query_txt_parallel(name: str, primary: list[DnsResolverTarget], spares: lis
 
 
 def _should_parallel(ordered: list[DnsResolverTarget]) -> bool:
-    if __import__("os").name == "nt":
+    if os.name == "nt":
         return False
     if len(ordered) < 2:
         return False

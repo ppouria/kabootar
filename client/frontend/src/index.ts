@@ -22,11 +22,27 @@ type SyncJobState = {
   refresh_result?: Record<string, unknown> | null;
 };
 
-type AutoRefreshState = {
+type ChannelStatePayload = {
+  ok: boolean;
+  selected: string;
+  latest_id: number;
+  message_count: number;
+  search_disabled: boolean;
+  header_html: string;
+  messages_html: string;
+};
+
+type ChannelNavigationState = {
   at: number;
   selected: string;
-  messageScrollTop: number;
-  stickToBottom: boolean;
+  title: string;
+  href: string;
+};
+
+type ParsedChannelToken = {
+  raw: string;
+  normalized: string;
+  valid: boolean;
 };
 
 class MirrorApp {
@@ -35,7 +51,8 @@ class MirrorApp {
   private readonly STORAGE_KEY = 'kabootar_read_v1';
   private readonly LANG_KEY = 'kabootar_lang';
   private readonly INSTALL_PROMPT_KEY = 'kabootar_install_prompt_dismissed_v1';
-  private readonly AUTO_REFRESH_STATE_KEY = 'kabootar_auto_refresh_state_v1';
+  private readonly CHANNEL_NAV_LOADING_KEY = 'kabootar_channel_nav_loading_v1';
+  private readonly CHANNEL_NAV_LOADING_MAX_AGE_MS = 20000;
   private readonly sourceMode: 'dns' | 'direct';
   private readonly dnsDomainsCount: number;
   private autoRefreshTimer: number | null = null;
@@ -79,6 +96,134 @@ class MirrorApp {
       .trim();
     const glyphs = Array.from(clean.replace(/\s+/g, ''));
     return (glyphs.slice(0, 2).join('') || '?').toUpperCase();
+  }
+
+  private sanitizeTelegramUsername(value: string): string {
+    let token = String(value || '').trim().replace(/\\/g, '/');
+    token = token.replace(/^@+/, '').replace(/^\/+|\/+$/g, '');
+    token = token.split(/[?#]/, 1)[0] || '';
+    if (!token) return '';
+    if (!/^[A-Za-z0-9_]{3,64}$/.test(token)) return '';
+    return token.toLowerCase();
+  }
+
+  private extractTelegramUsername(value: string): string {
+    let raw = String(value || '').trim();
+    if (!raw) return '';
+    raw = raw.replace(/\\/g, '/');
+
+    if (!raw.includes('://')) {
+      const brokenScheme = raw.match(/^(https?|tg)(\/+)(.+)$/i);
+      if (brokenScheme) {
+        raw = `${brokenScheme[1]}://${brokenScheme[3]}`;
+      } else if (raw.startsWith('//')) {
+        raw = `https:${raw}`;
+      }
+    }
+
+    const direct = this.sanitizeTelegramUsername(raw);
+    if (direct) return direct;
+
+    if (/^tg:/i.test(raw)) {
+      try {
+        const url = new URL(raw);
+        const queryUsername = this.sanitizeTelegramUsername(url.searchParams.get('domain') || '');
+        if (queryUsername) return queryUsername;
+      } catch {
+        return '';
+      }
+    }
+
+    const looksLikeTelegramUrl = /^(?:https?:\/\/|t\.me\/|telegram\.me\/|telegram\.dog\/|www\.t\.me\/|www\.telegram\.me\/)/i.test(raw);
+    if (looksLikeTelegramUrl || raw.includes('/')) {
+      try {
+        const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, '')}`;
+        const url = new URL(candidate);
+        const host = url.hostname.replace(/^www\./i, '').toLowerCase();
+        if (!['t.me', 'telegram.me', 'telegram.dog'].includes(host)) return '';
+        const segments = url.pathname.split('/').filter(Boolean);
+        if (!segments.length) return '';
+        if (segments[0]?.toLowerCase() === 's' && segments[1]) {
+          return this.sanitizeTelegramUsername(segments[1]);
+        }
+        if (['c', 'joinchat', 'addlist', 'share'].includes((segments[0] || '').toLowerCase())) {
+          return '';
+        }
+        return this.sanitizeTelegramUsername(segments[0]);
+      } catch {
+        const parts = raw.split('/').filter(Boolean);
+        if (!parts.length) return '';
+        if ((parts[0] || '').toLowerCase() === 's' && parts[1]) {
+          return this.sanitizeTelegramUsername(parts[1]);
+        }
+        return this.sanitizeTelegramUsername(parts[parts.length - 1]);
+      }
+    }
+
+    return '';
+  }
+
+  private normalizeChannelInputValue(value: string): string {
+    const username = this.extractTelegramUsername(value);
+    return username ? `https://t.me/s/${username}` : '';
+  }
+
+  private tokenizeChannelDraft(raw: string): string[] {
+    return String(raw || '')
+      .split(/[,;\n\r،]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+  }
+
+  private parseChannelDraft(raw: string): ParsedChannelToken[] {
+    return this.tokenizeChannelDraft(raw).map((token) => {
+      const normalized = this.normalizeChannelInputValue(token);
+      return {
+        raw: token,
+        normalized,
+        valid: !!normalized,
+      };
+    });
+  }
+
+  private uniqueNormalizedChannels(entries: ParsedChannelToken[]): string[] {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    entries.forEach((entry) => {
+      if (!entry.normalized || seen.has(entry.normalized)) return;
+      seen.add(entry.normalized);
+      out.push(entry.normalized);
+    });
+    return out;
+  }
+
+  private normalizeDomainInputValue(value: string): string {
+    let raw = String(value || '').trim();
+    if (!raw) return '';
+    raw = raw.replace(/\\/g, '/');
+
+    if (!raw.includes('://')) {
+      const brokenScheme = raw.match(/^(https?|wss?)(\/+)(.+)$/i);
+      if (brokenScheme) {
+        raw = `${brokenScheme[1]}://${brokenScheme[3]}`;
+      }
+    }
+
+    try {
+      const candidate = /^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw.replace(/^\/+/, '')}`;
+      const url = new URL(candidate);
+      const host = (url.hostname || '').trim().replace(/\.+$/g, '').toLowerCase();
+      return /^[a-z0-9.-]+$/i.test(host) ? host : '';
+    } catch {
+      const host = raw
+        .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '')
+        .replace(/^\/+/, '')
+        .split(/[/?#]/, 1)[0]
+        .trim()
+        .replace(/\.+$/g, '')
+        .toLowerCase();
+      return /^[a-z0-9.-]+$/i.test(host) ? host : '';
+    }
   }
 
   private requiresDomainBeforeChannel(): boolean {
@@ -141,7 +286,7 @@ class MirrorApp {
     }
 
     document.documentElement.lang = this.lang;
-    document.documentElement.dir = this.lang === 'fa' ? 'rtl' : 'ltr';
+    document.documentElement.dir = 'ltr';
     this.applyI18n();
     this.applyUnsupportedMediaLabels();
     this.updateLangToggleLabel();
@@ -301,19 +446,25 @@ class MirrorApp {
   }
 
   private setupMobileMenu(): void {
-    const btn = document.getElementById('menuBtn');
+    const btn = document.getElementById('menuBtn') as HTMLButtonElement | null;
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebarOverlay');
     if (!btn || !sidebar || !overlay) return;
+    const mobileQuery = window.matchMedia('(max-width: 900px)');
 
     const shouldAutoOpen = (): boolean => {
       const hasChannels = document.querySelectorAll('#sidebar .channel').length > 0;
-      return !this.selected && hasChannels && window.matchMedia('(max-width: 900px)').matches;
+      return !this.selected && hasChannels && mobileQuery.matches;
+    };
+
+    const syncButtonVisibility = () => {
+      btn.hidden = !mobileQuery.matches || sidebar.classList.contains('open');
     };
 
     const setOpen = (open: boolean) => {
       sidebar.classList.toggle('open', open);
       overlay.hidden = !open;
+      syncButtonVisibility();
     };
 
     setOpen(shouldAutoOpen());
@@ -331,6 +482,91 @@ class MirrorApp {
     });
 
     window.addEventListener('pageshow', () => setOpen(shouldAutoOpen()));
+    mobileQuery.addEventListener('change', () => setOpen(shouldAutoOpen()));
+  }
+
+  private loadChannelNavigationState(): ChannelNavigationState | null {
+    try {
+      const raw = sessionStorage.getItem(this.CHANNEL_NAV_LOADING_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw) as Partial<ChannelNavigationState> | null;
+      const at = Number(parsed?.at || 0);
+      if (!at || Date.now() - at > this.CHANNEL_NAV_LOADING_MAX_AGE_MS) {
+        sessionStorage.removeItem(this.CHANNEL_NAV_LOADING_KEY);
+        return null;
+      }
+      return {
+        at,
+        selected: typeof parsed?.selected === 'string' ? parsed.selected : '',
+        title: typeof parsed?.title === 'string' ? parsed.title : '',
+        href: typeof parsed?.href === 'string' ? parsed.href : '',
+      };
+    } catch {
+      sessionStorage.removeItem(this.CHANNEL_NAV_LOADING_KEY);
+      return null;
+    }
+  }
+
+  private persistChannelNavigationState(state: ChannelNavigationState): void {
+    try {
+      sessionStorage.setItem(this.CHANNEL_NAV_LOADING_KEY, JSON.stringify(state));
+    } catch {
+      // Ignore storage errors and still allow navigation.
+    }
+  }
+
+  private showChannelLoading(): void {
+    const feed = document.getElementById('chatFeed');
+    document.documentElement.classList.add('channel-loading-pending');
+    feed?.classList.add('is-loading');
+  }
+
+  private hideChannelLoading(): void {
+    const feed = document.getElementById('chatFeed');
+    document.documentElement.classList.remove('channel-loading-pending');
+    feed?.classList.remove('is-loading');
+    document.querySelectorAll('.channel.pending-nav').forEach((el) => el.classList.remove('pending-nav'));
+    try {
+      sessionStorage.removeItem(this.CHANNEL_NAV_LOADING_KEY);
+    } catch {
+      // Ignore storage errors.
+    }
+  }
+
+  private setupChannelNavigationLoading(): void {
+    document.querySelectorAll<HTMLAnchorElement>('.channel[href]').forEach((link) => {
+      link.addEventListener('click', (event) => {
+        if (event.defaultPrevented) return;
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (link.target && link.target !== '_self') return;
+
+        const selected = link.dataset.channelKey || '';
+        const href = link.href || '';
+        if (!selected || !href || selected === this.selected) return;
+
+        event.preventDefault();
+
+        const title = link.querySelector<HTMLElement>('.name')?.textContent?.trim()
+          || link.querySelector<HTMLElement>('.url')?.textContent?.trim()
+          || selected;
+
+        document.querySelectorAll('.channel.pending-nav').forEach((el) => el.classList.remove('pending-nav'));
+        link.classList.add('pending-nav');
+        this.persistChannelNavigationState({
+          at: Date.now(),
+          selected,
+          title,
+          href,
+        });
+        this.showChannelLoading();
+
+        requestAnimationFrame(() => {
+          window.setTimeout(() => {
+            window.location.assign(href);
+          }, 40);
+        });
+      });
+    });
   }
 
   private setupSidebarSearch(): void {
@@ -391,16 +627,11 @@ class MirrorApp {
     const clearBtn = document.getElementById('messageSearchClear') as HTMLButtonElement | null;
     const closeBtn = document.getElementById('messageSearchClose') as HTMLButtonElement | null;
     const empty = document.getElementById('messageSearchEmpty') as HTMLElement | null;
-    const unreadDivider = document.querySelector('.unread-divider') as HTMLElement | null;
     const messagesWrap = document.getElementById('messages') as HTMLElement | null;
     if (!toggle || !bar || !input || !messagesWrap) return;
-
-    const rows = [...messagesWrap.querySelectorAll<HTMLElement>('.msg[data-message-id]')];
-    const dateDividers = [...messagesWrap.querySelectorAll<HTMLElement>('.date-divider')];
-    if (!rows.length) {
-      toggle.disabled = true;
-      return;
-    }
+    const getRows = (): HTMLElement[] => [...messagesWrap.querySelectorAll<HTMLElement>('.msg[data-message-id]')];
+    const getDateDividers = (): HTMLElement[] => [...messagesWrap.querySelectorAll<HTMLElement>('.date-divider')];
+    const getUnreadDivider = (): HTMLElement | null => messagesWrap.querySelector('.unread-divider') as HTMLElement | null;
 
     const restoreText = (el: HTMLElement | null) => {
       if (!el) return;
@@ -438,8 +669,13 @@ class MirrorApp {
     const applyFilter = () => {
       const query = (input.value || '').trim();
       const queryLower = query.toLocaleLowerCase();
+      const rows = getRows();
+      const dateDividers = getDateDividers();
+      const unreadDivider = getUnreadDivider();
       let visible = 0;
       let firstVisible: HTMLElement | null = null;
+
+      toggle.disabled = rows.length === 0;
 
       rows.forEach((row) => {
         const textEl = row.querySelector<HTMLElement>('.text');
@@ -490,12 +726,13 @@ class MirrorApp {
       input.focus();
     });
     input.addEventListener('input', applyFilter);
-    input.addEventListener('keydown', (event) => {
+      input.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         setOpen(false);
       }
     });
+    applyFilter();
   }
 
   private setupAddChannelBox(): void {
@@ -504,10 +741,48 @@ class MirrorApp {
     const modal = document.getElementById('addModal') as HTMLElement | null;
     const form = document.getElementById('addModalForm') as HTMLFormElement | null;
     const cancel = document.getElementById('addModalCancel') as HTMLButtonElement | null;
+    const closeBtn = document.getElementById('addModalClose') as HTMLButtonElement | null;
     const submit = document.getElementById('addModalSubmit') as HTMLButtonElement | null;
+    const textarea = form?.querySelector('textarea[name="channel"]') as HTMLTextAreaElement | null;
     const errorHint = form?.querySelector('.add-form-error') as HTMLElement | null;
     const loadingHint = form?.querySelector('.add-form-loading') as HTMLElement | null;
+    const preview = document.getElementById('channelPreview') as HTMLElement | null;
+    const previewCount = document.getElementById('channelPreviewCount') as HTMLElement | null;
+    const previewList = document.getElementById('channelPreviewList') as HTMLElement | null;
     if (!modal || !form) return;
+
+    const renderPreview = () => {
+      if (!preview || !previewList || !previewCount || !textarea) return;
+      const entries = this.parseChannelDraft(textarea.value || '');
+      const normalizedChannels = this.uniqueNormalizedChannels(entries);
+
+      if (!entries.length) {
+        preview.hidden = true;
+        previewCount.textContent = this.t('index.channel_detected_none', 'No valid public channels detected yet.');
+        previewList.innerHTML = '';
+        return;
+      }
+
+      preview.hidden = false;
+      previewCount.textContent = normalizedChannels.length
+        ? this.withVars(this.t('index.channel_detected_count', '{count} channel(s) ready to add'), { count: String(normalizedChannels.length) })
+        : this.t('index.channel_detected_invalid', 'No valid public channel IDs detected yet.');
+
+      previewList.innerHTML = entries.slice(0, 12).map((entry) => {
+        const tone = entry.valid ? 'ok' : 'error';
+        const title = entry.valid ? entry.normalized : entry.raw;
+        const username = entry.valid ? entry.normalized.split('/').pop() || entry.normalized : entry.raw;
+        const subline = entry.valid
+          ? this.escapeHtml(entry.normalized)
+          : this.t('index.channel_preview_invalid', 'Unsupported or private link');
+        return `
+          <div class="preview-chip ${tone}" title="${this.escapeHtml(title)}">
+            <strong>${entry.valid ? `@${this.escapeHtml(username)}` : this.escapeHtml(entry.raw)}</strong>
+            <span>${subline}</span>
+          </div>
+        `;
+      }).join('');
+    };
 
     const open = (ev: Event) => {
       ev.preventDefault();
@@ -515,8 +790,8 @@ class MirrorApp {
       if (loadingHint) loadingHint.hidden = true;
       if (errorHint) errorHint.hidden = true;
       modal.hidden = false;
-      const t = form.querySelector<HTMLTextAreaElement>('textarea[name="channel"]');
-      setTimeout(() => t?.focus(), 20);
+      renderPreview();
+      setTimeout(() => textarea?.focus(), 20);
     };
 
     const close = () => {
@@ -525,6 +800,10 @@ class MirrorApp {
 
     btnBottom?.addEventListener('click', open);
     btnMain?.addEventListener('click', open);
+    closeBtn?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      close();
+    });
     cancel?.addEventListener('click', (ev) => {
       ev.preventDefault();
       close();
@@ -543,46 +822,19 @@ class MirrorApp {
         el.disabled = on;
       });
       if (loadingHint) loadingHint.hidden = !on;
-      if (submit) submit.textContent = this.t(on ? 'index.adding' : 'common.add', on ? 'Adding...' : 'Add');
+      if (submit) submit.textContent = this.t(on ? 'index.adding' : 'index.add_channel_submit', on ? 'Adding...' : 'Add channels');
     };
 
-    const parseChannels = (raw: string): string[] => {
-      return (raw || '').split(/[,;\n\r،]+/).map((x) => x.trim()).filter(Boolean);
-    };
-
-    const normalizeSourceUrl = (value: string): string => {
-      const v = value.trim().replace(/^@+/, '');
-      if (!v) return '';
-      if (v.startsWith('http://') || v.startsWith('https://')) {
-        const normalized = v.replace('http://', 'https://').replace(/\/+$/, '');
-        if (normalized.includes('/s/')) return normalized;
-        if (normalized.includes('t.me/')) {
-          const username = normalized.split('/').filter(Boolean).pop() || '';
-          return username ? `https://t.me/s/${username}` : '';
-        }
-        return normalized;
-      }
-      if (v.includes('t.me/s/')) {
-        return `https://${v.replace(/^https?:\/\//, '')}`.replace(/\/+$/, '');
-      }
-      if (v.includes('t.me/')) {
-        const username = v.split('/').filter(Boolean).pop() || '';
-        return username ? `https://t.me/s/${username}` : '';
-      }
-      return `https://t.me/s/${v}`;
-    };
-
-    const addPendingChannels = (rawChannels: string[]) => {
+    const addPendingChannels = (normalizedChannels: string[]) => {
       const sidebar = document.getElementById('sidebar');
       if (!sidebar) return;
       const addBox = sidebar.querySelector('.sidebar-add-box');
       const emptyState = sidebar.querySelector('.sidebar-empty');
       emptyState?.remove();
-      rawChannels.forEach((raw) => {
-        const sourceUrl = normalizeSourceUrl(raw);
+      normalizedChannels.forEach((sourceUrl) => {
         if (!sourceUrl) return;
         if (sidebar.querySelector(`.channel[data-channel-key="${sourceUrl}"]`)) return;
-        const username = sourceUrl.split('/').pop() || raw.replace(/^@+/, '');
+        const username = sourceUrl.split('/').pop() || '';
         const safeUsername = this.escapeHtml(username);
         const safeSourceUrl = this.escapeHtml(sourceUrl);
         const row = document.createElement('div');
@@ -607,14 +859,28 @@ class MirrorApp {
       this.refreshSidebarSearch?.();
     };
 
+    textarea?.addEventListener('input', () => {
+      if (errorHint) errorHint.hidden = true;
+      renderPreview();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !modal.hidden) close();
+    });
+
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      const channelsRaw = (form.querySelector('textarea[name="channel"]') as HTMLTextAreaElement | null)?.value?.trim() || '';
+      const channelsRaw = textarea?.value?.trim() || '';
       if (errorHint) errorHint.hidden = true;
-      const channels = parseChannels(channelsRaw);
+      const parsed = this.parseChannelDraft(channelsRaw);
+      const channels = this.uniqueNormalizedChannels(parsed);
       if (!channels.length) {
         if (errorHint) {
-          errorHint.textContent = this.t('index.channel_required', 'Channel is required.');
+          const hasAnyInput = this.tokenizeChannelDraft(channelsRaw).length > 0;
+          errorHint.textContent = this.t(
+            hasAnyInput ? 'index.channel_invalid_public_only' : 'index.channel_required',
+            hasAnyInput ? 'Only public Telegram channel usernames and links are supported.' : 'Channel is required.',
+          );
           errorHint.hidden = false;
         }
         return;
@@ -627,12 +893,14 @@ class MirrorApp {
         return;
       }
 
+      if (textarea) textarea.value = channels.join('\n');
+      const payload = new FormData(form);
       if (channels.length) addPendingChannels(channels);
       setSubmitting(true);
       try {
         const response = await fetch(form.action, {
           method: 'POST',
-          body: new FormData(form),
+          body: payload,
           redirect: 'follow',
         });
         if (response.redirected && response.url) {
@@ -656,18 +924,44 @@ class MirrorApp {
     const modal = document.getElementById('addDomainModal') as HTMLElement | null;
     const form = document.getElementById('addDomainModalForm') as HTMLFormElement | null;
     const cancel = document.getElementById('addDomainModalCancel') as HTMLButtonElement | null;
+    const closeBtn = document.getElementById('addDomainModalClose') as HTMLButtonElement | null;
     const submit = document.getElementById('addDomainModalSubmit') as HTMLButtonElement | null;
+    const domainInput = form?.querySelector('input[name="domain"]') as HTMLInputElement | null;
+    const passwordInput = form?.querySelector('input[name="password"]') as HTMLInputElement | null;
     const errorHint = form?.querySelector('.add-form-error') as HTMLElement | null;
     const loadingHint = form?.querySelector('.add-form-loading') as HTMLElement | null;
+    const normalizedHint = document.getElementById('addDomainNormalizedHint') as HTMLElement | null;
     if (!modal || !form) return;
+
+    const renderNormalizedHint = () => {
+      if (!normalizedHint || !domainInput) return;
+      const raw = domainInput.value || '';
+      const normalized = this.normalizeDomainInputValue(raw);
+      if (!raw.trim()) {
+        normalizedHint.hidden = true;
+        normalizedHint.classList.remove('invalid');
+        normalizedHint.textContent = '';
+        return;
+      }
+      normalizedHint.hidden = false;
+      if (!normalized) {
+        normalizedHint.classList.add('invalid');
+        normalizedHint.textContent = this.t('index.domain_invalid', 'Enter a valid domain or URL.');
+        return;
+      }
+      normalizedHint.classList.remove('invalid');
+      normalizedHint.textContent = this.withVars(this.t('index.domain_normalized_hint', 'Will save as {domain}'), {
+        domain: normalized,
+      });
+    };
 
     const open = (ev: Event) => {
       ev.preventDefault();
       if (loadingHint) loadingHint.hidden = true;
       if (errorHint) errorHint.hidden = true;
       modal.hidden = false;
-      const field = form.querySelector<HTMLInputElement>('input[name="domain"]');
-      setTimeout(() => field?.focus(), 20);
+      renderNormalizedHint();
+      setTimeout(() => domainInput?.focus(), 20);
     };
 
     const close = () => {
@@ -676,6 +970,10 @@ class MirrorApp {
 
     btnBottom?.addEventListener('click', open);
     btnMain?.addEventListener('click', open);
+    closeBtn?.addEventListener('click', (ev) => {
+      ev.preventDefault();
+      close();
+    });
     cancel?.addEventListener('click', (ev) => {
       ev.preventDefault();
       close();
@@ -694,26 +992,38 @@ class MirrorApp {
         el.disabled = on;
       });
       if (loadingHint) loadingHint.hidden = !on;
-      if (submit) submit.textContent = this.t(on ? 'index.adding' : 'common.add', on ? 'Adding...' : 'Add');
+      if (submit) submit.textContent = this.t(on ? 'index.adding' : 'index.add_domain_submit', on ? 'Adding...' : 'Add domain');
     };
+
+    domainInput?.addEventListener('input', () => {
+      if (errorHint) errorHint.hidden = true;
+      renderNormalizedHint();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !modal.hidden) close();
+    });
 
     form.addEventListener('submit', async (ev) => {
       ev.preventDefault();
-      const domain = (form.querySelector('input[name="domain"]') as HTMLInputElement | null)?.value?.trim() || '';
+      const domain = this.normalizeDomainInputValue(domainInput?.value || '');
       if (errorHint) errorHint.hidden = true;
       if (!domain) {
         if (errorHint) {
-          errorHint.textContent = this.t('index.domain_required', 'Domain is required.');
+          errorHint.textContent = this.t('index.domain_invalid', 'Enter a valid domain or URL.');
           errorHint.hidden = false;
         }
         return;
       }
 
+      if (domainInput) domainInput.value = domain;
+      if (passwordInput) passwordInput.value = (passwordInput.value || '').trim();
+      const payload = new FormData(form);
       setSubmitting(true);
       try {
         const response = await fetch(form.action, {
           method: 'POST',
-          body: new FormData(form),
+          body: payload,
           redirect: 'follow',
         });
         if (response.redirected && response.url) {
@@ -829,9 +1139,11 @@ class MirrorApp {
         }
       }
 
-      if (job.status === 'done' && job.saved > 0 && !reloadScheduled) {
+      if (job.status === 'done' && job.ok !== false && !reloadScheduled) {
         reloadScheduled = true;
-        window.setTimeout(() => window.location.reload(), 900);
+        window.setTimeout(() => {
+          void this.refreshCurrentChannelView().catch(() => {});
+        }, 500);
       }
     };
 
@@ -906,6 +1218,7 @@ class MirrorApp {
     const closeBtn = document.getElementById('imageViewerClose') as HTMLButtonElement | null;
     const thumbs = [...document.querySelectorAll<HTMLImageElement>('.msg-photo')];
     if (!modal || !stage || !shell || !image || !thumbs.length) return;
+    const staticBound = modal.dataset.viewerStaticBound === '1';
 
     let open = false;
     let pointerId: number | null = null;
@@ -1003,6 +1316,8 @@ class MirrorApp {
     };
 
     thumbs.forEach((thumb) => {
+      if (thumb.dataset.viewerBound === '1') return;
+      thumb.dataset.viewerBound = '1';
       thumb.tabIndex = 0;
       thumb.addEventListener('click', () => show(thumb.currentSrc || thumb.src, thumb.alt || ''));
       thumb.addEventListener('keydown', (event) => {
@@ -1012,6 +1327,9 @@ class MirrorApp {
         }
       });
     });
+
+    if (staticBound) return;
+    modal.dataset.viewerStaticBound = '1';
 
     closeBtn?.addEventListener('click', (event) => {
       event.preventDefault();
@@ -1034,21 +1352,6 @@ class MirrorApp {
 
     document.addEventListener('keydown', (event) => {
       if (open && event.key === 'Escape') close();
-    });
-  }
-
-  private setupLiteMode(): void {
-    const btn = document.getElementById('liteBtn');
-    const key = 'kabootar_lite_v1';
-    const isLite = localStorage.getItem(key) === '1';
-    if (isLite) document.body.classList.add('lite-mode');
-    if (!btn) return;
-    btn.classList.toggle('active', isLite);
-    btn.addEventListener('click', () => {
-      const next = !document.body.classList.contains('lite-mode');
-      document.body.classList.toggle('lite-mode', next);
-      localStorage.setItem(key, next ? '1' : '0');
-      btn.classList.toggle('active', next);
     });
   }
 
@@ -1129,64 +1432,78 @@ class MirrorApp {
     }
   }
 
-  private loadAutoRefreshState(): AutoRefreshState | null {
-    try {
-      const raw = sessionStorage.getItem(this.AUTO_REFRESH_STATE_KEY);
-      if (!raw) return null;
-      sessionStorage.removeItem(this.AUTO_REFRESH_STATE_KEY);
-      const parsed = JSON.parse(raw) as Partial<AutoRefreshState> | null;
-      const at = Number(parsed?.at || 0);
-      if (!at || Date.now() - at > this.AUTO_REFRESH_MS * 3) return null;
-      return {
-        at,
-        selected: typeof parsed?.selected === 'string' ? parsed.selected : '',
-        messageScrollTop: Math.max(0, Number(parsed?.messageScrollTop || 0) || 0),
-        stickToBottom: parsed?.stickToBottom === true,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  private persistAutoRefreshState(): void {
-    try {
-      const wrap = document.getElementById('messages') as HTMLElement | null;
-      const state: AutoRefreshState = {
-        at: Date.now(),
-        selected: this.selected,
-        messageScrollTop: Math.max(0, Number(wrap?.scrollTop || 0) || 0),
-        stickToBottom: !!wrap && (wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40),
-      };
-      sessionStorage.setItem(this.AUTO_REFRESH_STATE_KEY, JSON.stringify(state));
-    } catch {
-      // Ignore storage errors and still allow the refresh.
-    }
-  }
-
-  private restoreAfterAutoRefresh(state: AutoRefreshState | null, fallbackDivider: HTMLElement | null): void {
-    if (!state || state.selected !== this.selected) {
-      this.scrollToUnreadOrBottom(fallbackDivider);
-      return;
-    }
+  private async refreshCurrentChannelView(): Promise<boolean> {
+    if (!this.selected) return false;
 
     const wrap = document.getElementById('messages') as HTMLElement | null;
-    if (!wrap) {
-      this.scrollToUnreadOrBottom(fallbackDivider);
-      return;
+    const headerPrimary = document.getElementById('chatHeaderPrimary') as HTMLElement | null;
+    const searchToggle = document.getElementById('messageSearchToggle') as HTMLButtonElement | null;
+    if (!wrap || !headerPrimary) return false;
+
+    const hadMessages = !!wrap.querySelector('.msg[data-message-id]');
+    const stickToBottom = wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight < 40;
+    const distanceFromBottom = Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+
+    const response = await fetch(`/channel/state?channel=${encodeURIComponent(this.selected)}`, {
+      cache: 'no-store',
+      headers: {
+        Accept: 'application/json',
+        'X-Kabootar-Request': 'fetch',
+      },
+    });
+    const payload = (await response.json()) as ChannelStatePayload & { error?: string };
+    if (!response.ok || !payload.ok) {
+      throw new Error(payload.error || 'channel_refresh_failed');
     }
 
-    const apply = () => {
-      if (state.stickToBottom) {
+    headerPrimary.innerHTML = payload.header_html || '';
+    wrap.innerHTML = payload.messages_html || '';
+    if (searchToggle) searchToggle.disabled = !!payload.search_disabled;
+
+    const activeRow = [...document.querySelectorAll<HTMLElement>('.channel')].find((el) => el.dataset.channelKey === this.selected);
+    if (activeRow) {
+      activeRow.dataset.latestId = String(Math.max(0, Number(payload.latest_id || 0) || 0));
+    }
+
+    const readMap = this.loadReadMap();
+    this.applyI18n(headerPrimary);
+    this.applyI18n(wrap);
+    this.applyUnsupportedMediaLabels(wrap);
+    this.applyTimes();
+    this.addDateDividers();
+    this.applyUnreadBadges(readMap);
+    const divider = this.addUnreadDivider(readMap);
+    this.setupImageViewer();
+    this.refreshSidebarSearch?.();
+
+    const messageSearchInput = document.getElementById('messageSearchInput') as HTMLInputElement | null;
+    if (messageSearchInput?.value?.trim()) {
+      messageSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      return true;
+    }
+
+    if (!payload.message_count) {
+      wrap.scrollTop = 0;
+      return true;
+    }
+
+    if (!hadMessages) {
+      this.scrollToUnreadOrBottom(divider);
+      return true;
+    }
+
+    const applyPosition = () => {
+      if (stickToBottom) {
         wrap.scrollTop = wrap.scrollHeight;
         return;
       }
       const maxScroll = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
-      wrap.scrollTop = Math.min(state.messageScrollTop, maxScroll);
+      wrap.scrollTop = Math.max(0, Math.min(maxScroll, wrap.scrollHeight - wrap.clientHeight - distanceFromBottom));
     };
 
-    apply();
-    requestAnimationFrame(apply);
-    window.setTimeout(apply, 120);
+    applyPosition();
+    requestAnimationFrame(applyPosition);
+    return true;
   }
 
   private hasBlockingModalOpen(): boolean {
@@ -1221,18 +1538,22 @@ class MirrorApp {
     if (this.autoRefreshTimer != null) {
       window.clearTimeout(this.autoRefreshTimer);
     }
-    this.autoRefreshTimer = window.setTimeout(() => {
+    this.autoRefreshTimer = window.setTimeout(async () => {
       if (!this.canAutoRefresh()) {
         this.scheduleAutoRefresh();
         return;
       }
-      this.persistAutoRefreshState();
-      window.location.reload();
+      try {
+        await this.refreshCurrentChannelView();
+      } catch {
+        // Ignore intermittent refresh failures and retry on the next cycle.
+      }
+      this.scheduleAutoRefresh();
     }, delay);
   }
 
-  private setupAutoRefresh(): void {
-    this.scheduleAutoRefresh();
+  private setupAutoRefresh(initialDelay = this.AUTO_REFRESH_MS): void {
+    this.scheduleAutoRefresh(initialDelay);
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
@@ -1248,14 +1569,23 @@ class MirrorApp {
   public async mount(): Promise<void> {
     await this.initI18n();
 
-    const autoRefreshState = this.loadAutoRefreshState();
+    localStorage.removeItem('kabootar_lite_v1');
+
+    const channelNavigationState = this.loadChannelNavigationState();
+    const shouldKeepChannelLoader = !!channelNavigationState && !!this.selected && channelNavigationState.selected === this.selected;
+    if (shouldKeepChannelLoader) {
+      this.showChannelLoading();
+    } else {
+      this.hideChannelLoading();
+    }
+
     const readMap = this.loadReadMap();
-    this.setupLiteMode();
     this.applyTimes();
     this.addDateDividers();
     this.applyUnreadBadges(readMap);
     const divider = this.addUnreadDivider(readMap);
     this.setupMobileMenu();
+    this.setupChannelNavigationLoading();
     this.setupSidebarSearch();
     this.setupMessageSearch();
     this.setupAddDomainBox();
@@ -1264,8 +1594,14 @@ class MirrorApp {
     this.setupImageViewer();
     this.setupInstallPrompt();
     this.registerSW();
-    this.setupAutoRefresh();
-    window.setTimeout(() => this.restoreAfterAutoRefresh(autoRefreshState, divider), 30);
+    const hasMessages = !!document.querySelector('.msg[data-message-id]');
+    this.setupAutoRefresh(this.selected && !hasMessages ? 5000 : this.AUTO_REFRESH_MS);
+    window.setTimeout(() => {
+      this.scrollToUnreadOrBottom(divider);
+      if (shouldKeepChannelLoader) {
+        window.setTimeout(() => this.hideChannelLoading(), 420);
+      }
+    }, 30);
 
     if (this.selected) {
       const maybeMarkRead = () => {
