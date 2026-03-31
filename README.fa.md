@@ -1,6 +1,30 @@
-# کبوتر
+<p align="center">
+  <img src="client/frontend/static/kabootar.svg" alt="کبوتر" width="132" />
+</p>
 
-[English](README.md) · [کانال تلگرام](https://t.me/viapouria) · [آخرین ریلیز](https://github.com/ppouria/kabootar/releases/latest) · [مجوز MIT](LICENSE)
+<h1 align="center">کبوتر</h1>
+
+<p align="center">
+  <a href="https://github.com/ppouria/kabootar/releases/latest">
+    <img src="https://img.shields.io/github/v/release/ppouria/kabootar?style=for-the-badge" alt="آخرین ریلیز" />
+  </a>
+  <a href="https://github.com/ppouria/kabootar/stargazers">
+    <img src="https://img.shields.io/github/stars/ppouria/kabootar?style=for-the-badge" alt="ستاره‌ها" />
+  </a>
+  <a href="https://github.com/ppouria/kabootar/releases">
+    <img src="https://img.shields.io/github/downloads/ppouria/kabootar/total?style=for-the-badge" alt="دانلودها" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/ppouria/kabootar?style=for-the-badge" alt="مجوز MIT" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="https://t.me/viapouria">کانال تلگرام</a> ·
+  <a href="https://github.com/ppouria/kabootar/releases/latest">آخرین ریلیز</a> ·
+  <a href="LICENSE">مجوز MIT</a>
+</p>
 
 کبوتر برای روزهای بد ساخته شده.
 برای وقتی که اینترنت کند است، مسیرها ناپایدار شده اند، یا راه معمول گرفتن خبر دیگر قابل اعتماد نیست.

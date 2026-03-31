@@ -1,6 +1,30 @@
-# Kabootar
+<p align="center">
+  <img src="client/frontend/static/kabootar.svg" alt="Kabootar" width="132" />
+</p>
 
-[فارسی](README.fa.md) · [Telegram Channel](https://t.me/viapouria) · [Latest Release](https://github.com/ppouria/kabootar/releases/latest) · [MIT License](LICENSE)
+<h1 align="center">Kabootar</h1>
+
+<p align="center">
+  <a href="https://github.com/ppouria/kabootar/releases/latest">
+    <img src="https://img.shields.io/github/v/release/ppouria/kabootar?style=for-the-badge" alt="Latest Release" />
+  </a>
+  <a href="https://github.com/ppouria/kabootar/stargazers">
+    <img src="https://img.shields.io/github/stars/ppouria/kabootar?style=for-the-badge" alt="GitHub Stars" />
+  </a>
+  <a href="https://github.com/ppouria/kabootar/releases">
+    <img src="https://img.shields.io/github/downloads/ppouria/kabootar/total?style=for-the-badge" alt="Downloads" />
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/github/license/ppouria/kabootar?style=for-the-badge" alt="MIT License" />
+  </a>
+</p>
+
+<p align="center">
+  <a href="README.fa.md">فارسی</a> ·
+  <a href="https://t.me/viapouria">Telegram Channel</a> ·
+  <a href="https://github.com/ppouria/kabootar/releases/latest">Latest Release</a> ·
+  <a href="LICENSE">MIT License</a>
+</p>
 
 Kabootar is a crisis-first transport tool for important news.
 It was built for the kind of situation where ordinary access to updates becomes slow, unstable, filtered, or simply too brittle to trust.
