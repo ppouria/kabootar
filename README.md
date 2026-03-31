@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="client/frontend/static/kabootar.svg" alt="Kabootar" width="132" />
+  <img src="client/frontend/static/kabootar.svg" alt="Kabootar" width="168" />
 </p>
 
-<h1 align="center">Kabootar</h1>
+<h1 align="center" style="margin-top: -6px;">Kabootar</h1>
 
 <p align="center">
   <a href="https://github.com/ppouria/kabootar/releases/latest">

@@ -169,11 +169,20 @@ class SettingsView {
         const password = (row.querySelector('.domain-password')?.value || '').trim();
         return { domain, password };
     }
+    compactInlineText(text, maxLength = 88) {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        if (normalized.length <= maxLength)
+            return normalized;
+        return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+    }
     setDomainBadge(row, text, state = 'idle') {
         const badge = row.querySelector('.domain-health-badge');
         if (!badge)
             return;
-        badge.textContent = text;
+        const fullText = String(text || '').trim();
+        badge.textContent = this.compactInlineText(fullText);
+        badge.title = fullText;
+        badge.setAttribute('aria-label', fullText);
         badge.dataset.state = state;
     }
     setDomainButtonsState(row, busy) {

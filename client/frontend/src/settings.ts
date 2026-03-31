@@ -183,10 +183,19 @@ class SettingsView {
     return { domain, password };
   }
 
+  private compactInlineText(text: string, maxLength = 88): string {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+  }
+
   private setDomainBadge(row: HTMLElement, text: string, state: 'idle' | 'ok' | 'error' | 'busy' = 'idle'): void {
     const badge = row.querySelector('.domain-health-badge') as HTMLElement | null;
     if (!badge) return;
-    badge.textContent = text;
+    const fullText = String(text || '').trim();
+    badge.textContent = this.compactInlineText(fullText);
+    badge.title = fullText;
+    badge.setAttribute('aria-label', fullText);
     badge.dataset.state = state;
   }
 

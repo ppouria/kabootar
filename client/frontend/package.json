@@ -1,7 +1,7 @@
 {
   "name": "kabootar-frontend",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.1",
   "devDependencies": {
     "typescript": "^5.6.3"
   },
