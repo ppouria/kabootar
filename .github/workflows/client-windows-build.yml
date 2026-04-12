@@ -136,7 +136,7 @@ jobs:
 
       - name: Verify Persian Encoder Data In EXE (${{ matrix.label }})
         run: |
-          $archiveList = python -m PyInstaller.utils.cliutils.archive_viewer -l dist\kabootar.exe
+          $archiveList = python -m PyInstaller.utils.cliutils.archive_viewer -l dist\kabootar.exe | Out-String
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ($archiveList -notmatch "persian_encoder[\\/]+data[\\/]+hazm_words\.tsv") {
             throw "Missing persian_encoder data file (hazm_words.tsv) in built EXE."
