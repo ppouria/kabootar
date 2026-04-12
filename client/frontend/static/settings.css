@@ -431,6 +431,182 @@
   color:#d9e8ff;
 }
 
+.resolver-scanner-field{
+  border-top:1px dashed rgba(255,255,255,.08);
+  padding-top:14px;
+}
+
+.resolver-scanner-source{
+  border:1px solid rgba(124,164,236,.2);
+  border-radius:12px;
+  background:linear-gradient(180deg,rgba(12,24,44,.66),rgba(7,16,32,.82));
+  padding:10px;
+  margin-bottom:10px;
+}
+
+.resolver-scanner-source-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:8px;
+}
+
+.resolver-scanner-source-title{
+  font-size:12px;
+  font-weight:700;
+  color:#d9e9ff;
+}
+
+.resolver-scanner-source-count{
+  font-size:11px;
+  color:#9fb8d8;
+  white-space:nowrap;
+}
+
+.resolver-scan-input{
+  width:100%;
+  min-height:132px;
+  resize:vertical;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;
+  line-height:1.55;
+  background:rgba(2,10,23,.62);
+  border:1px solid rgba(255,255,255,.1);
+}
+
+.resolver-scanner-source-actions{
+  margin-top:9px;
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.resolver-scanner-options{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:8px 12px;
+  margin:8px 0 10px;
+}
+
+.resolver-scan-toggle{
+  min-height:34px;
+  padding:0 10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:10px;
+  background:rgba(255,255,255,.02);
+  color:#d3e3f8;
+}
+
+.resolver-scan-sort{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:34px;
+  padding:0 10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:10px;
+  background:rgba(255,255,255,.02);
+  color:#d3e3f8;
+  font-size:12px;
+}
+
+.resolver-sort-select{
+  min-width:120px;
+  height:30px;
+  padding:0 8px;
+  border-radius:8px;
+  border:1px solid rgba(255,255,255,.15);
+  background:rgba(7,16,32,.78);
+  color:#deebff;
+}
+
+.resolver-scanner-actions{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+}
+
+.resolver-scan-console{
+  margin:0;
+  min-height:200px;
+  max-height:360px;
+  overflow:auto;
+  border:1px solid rgba(124,164,236,.22);
+  border-radius:12px;
+  background:linear-gradient(180deg,rgba(3,11,23,.96),rgba(4,10,20,.9));
+  color:#dbeaff;
+  font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:12px;
+  line-height:1.45;
+  padding:12px;
+  white-space:pre-wrap;
+  word-break:break-word;
+}
+
+.resolver-scan-top{
+  margin-top:10px;
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:12px;
+  background:rgba(255,255,255,.02);
+  padding:10px;
+}
+
+.resolver-scan-top-title{
+  font-size:12px;
+  font-weight:700;
+  color:var(--text-soft);
+  margin-bottom:8px;
+}
+
+.resolver-scan-top-rows{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.resolver-scan-top-row{
+  border:1px solid rgba(255,255,255,.08);
+  border-radius:10px;
+  padding:8px 10px;
+  background:rgba(255,255,255,.03);
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:8px;
+  align-items:center;
+  min-width:0;
+}
+
+.resolver-scan-top-main{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+}
+
+.resolver-scan-top-resolver{
+  font-size:12px;
+  font-weight:700;
+  color:#deebff;
+}
+
+.resolver-scan-top-details{
+  font-size:11px;
+  color:#b8cde4;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+
+.resolver-scan-top-meta{
+  font-size:11px;
+  color:#9fb5cd;
+  text-align:end;
+  white-space:nowrap;
+}
+
 .toggle{
   display:flex;
   align-items:center;
@@ -476,6 +652,18 @@
   color:#fff;
   border-color:rgba(116,154,236,.28);
   background:rgba(97,140,233,.1);
+}
+
+.btn-secondary.btn-danger{
+  border-color:rgba(255,124,124,.35);
+  color:#ffd7d7;
+  background:rgba(127,26,26,.2);
+}
+
+.btn-secondary.btn-danger:hover{
+  border-color:rgba(255,124,124,.52);
+  color:#fff2f2;
+  background:rgba(161,33,33,.28);
 }
 
 .btn-primary{
@@ -810,8 +998,31 @@
 
   .actions.sticky > *,
   .security-actions > *,
-  .modal-actions > *{
+  .modal-actions > *,
+  .resolver-scanner-source-actions > *,
+  .resolver-scanner-actions > *{
     width:100%;
+  }
+
+  .resolver-scan-top-row{
+    grid-template-columns:1fr;
+  }
+
+  .resolver-scan-top-meta{
+    text-align:start;
+  }
+
+  .resolver-scanner-options{
+    grid-template-columns:1fr;
+  }
+
+  .resolver-scan-sort{
+    justify-content:space-between;
+  }
+
+  .resolver-scanner-source-head{
+    flex-direction:column;
+    align-items:flex-start;
   }
 
   .modal{

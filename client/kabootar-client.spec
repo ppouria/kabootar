@@ -5,7 +5,7 @@ a = Analysis(
     ['desktop_client.py'],
     pathex=[],
     binaries=[],
-    datas=[('frontend\\templates', 'frontend\\templates'), ('frontend\\static', 'frontend\\static'), ('alembic', 'alembic')],
+    datas=[('frontend\\templates', 'frontend\\templates'), ('frontend\\static', 'frontend\\static'), ('app\\db\\alembic', 'app\\db\\alembic')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

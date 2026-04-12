@@ -18,7 +18,17 @@ DEFAULTS: dict[str, str] = {
     "telegram_channels": os.getenv("TELEGRAM_CHANNELS", ""),
     "telegram_proxies": os.getenv("TELEGRAM_PROXIES", ""),
     "dns_domain": os.getenv("DNS_DOMAIN", "t.example.com"),
+    # Optional extra domains (CSV). Server answers for DNS_DOMAIN plus these.
+    "dns_domains": os.getenv("DNS_DOMAINS", ""),
     "dns_port": os.getenv("DNS_PORT", "5533"),
+    # Bind/address and DNS response behavior.
+    "dns_bind_address": os.getenv("DNS_BIND_ADDRESS", "0.0.0.0"),
+    "dns_ttl": os.getenv("DNS_TTL", "30"),
+    "dns_refresh_seconds": os.getenv("DNS_REFRESH_SECONDS", "60"),
+    "dns_recent_per_channel": os.getenv("DNS_RECENT_PER_CHANNEL", "50"),
+    # Fallback upstream resolver for non-bridge domains.
+    "dns_fallback_host": os.getenv("DNS_FALLBACK_HOST", "127.0.0.1"),
+    "dns_fallback_port": os.getenv("DNS_FALLBACK_PORT", "5300"),
 }
 
 

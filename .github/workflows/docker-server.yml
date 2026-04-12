@@ -12,6 +12,12 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      build_server_image:
+        description: "Build DNS docker image"
+        required: true
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -22,8 +28,32 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/kabootar-dns
 
 jobs:
+  prepare-version:
+    name: Prepare Version
+    runs-on: ubuntu-latest
+    outputs:
+      version_name: ${{ steps.ver.outputs.version_name }}
+      version_tag: ${{ steps.ver.outputs.version_tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read Version
+        id: ver
+        shell: bash
+        run: |
+          VERSION_NAME="$(sed -n 's/^version_name=//p' version.properties | head -n 1)"
+
+          VERSION_NAME="${VERSION_NAME:-0.0.0}"
+          SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+
+          echo "version_name=${SAFE_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version_tag=v${SAFE_NAME}" >> "${GITHUB_OUTPUT}"
+
   build-server-image:
     name: Build Server Docker Image
+    needs: prepare-version
+    if: github.event_name != 'workflow_dispatch' || inputs.build_server_image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -41,6 +71,8 @@ jobs:
             type=sha,prefix=sha-
             type=ref,event=branch
             type=ref,event=tag
+            type=raw,value=${{ needs.prepare-version.outputs.version_tag }}
+            type=raw,value=v${{ needs.prepare-version.outputs.version_name }}
             type=raw,value=latest,enable=${{ github.event_name == 'release' }}
 
       - name: Log in to GHCR
@@ -70,7 +102,7 @@ jobs:
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: kabootar-dns-docker-image
+          name: Kabootar-dns-docker-image-${{ needs.prepare-version.outputs.version_tag }}
           path: /tmp/kabootar-dns-image.tar
           if-no-files-found: error
 
@@ -80,7 +112,7 @@ jobs:
         with:
           context: ./server
           file: ./server/Dockerfile
-          platforms: linux/amd64
+          platforms: linux/amd64,linux/arm64
           push: true
           provenance: false
           sbom: false

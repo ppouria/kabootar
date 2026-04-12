@@ -5,6 +5,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     DATABASE_URL=sqlite:///./data/app.db \
     DNS_DOMAIN=t.example.com \
+    DNS_DOMAINS= \
     DNS_PORT=5533
 
 WORKDIR /app
@@ -18,7 +19,7 @@ COPY requirements.txt manage.py alembic.ini ./
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir -r requirements.txt
 
-COPY alembic ./alembic
+COPY app/db/alembic ./app/db/alembic
 COPY app ./app
 COPY docker-entrypoint.sh ./docker-entrypoint.sh
 COPY .env.example ./.env.example

@@ -8,6 +8,7 @@ class MirrorApp {
         this.CHANNEL_NAV_LOADING_MAX_AGE_MS = 20000;
         this.autoRefreshTimer = null;
         this.refreshSidebarSearch = null;
+        this.refreshScrollBottomButton = null;
         this.lang = 'fa';
         this.i18n = {};
         const chat = document.getElementById('chat');
@@ -375,6 +376,36 @@ class MirrorApp {
         setTimeout(() => {
             autoPin = false;
         }, 900);
+    }
+    setupScrollToBottomButton() {
+        const wrap = document.getElementById('messages');
+        const button = document.getElementById('scrollToBottomBtn');
+        if (!wrap || !button)
+            return;
+        let raf = 0;
+        const update = () => {
+            const distanceFromBottom = Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+            const threshold = Math.max(0, wrap.clientHeight);
+            const visible = distanceFromBottom > threshold;
+            button.hidden = !visible;
+            button.classList.toggle('visible', visible);
+        };
+        const requestUpdate = () => {
+            if (raf)
+                return;
+            raf = window.requestAnimationFrame(() => {
+                raf = 0;
+                update();
+            });
+        };
+        wrap.addEventListener('scroll', requestUpdate, { passive: true });
+        window.addEventListener('resize', requestUpdate, { passive: true });
+        button.addEventListener('click', () => {
+            wrap.scrollTo({ top: wrap.scrollHeight, behavior: 'smooth' });
+            requestUpdate();
+        });
+        this.refreshScrollBottomButton = requestUpdate;
+        requestUpdate();
     }
     setupMobileMenu() {
         const btn = document.getElementById('menuBtn');
@@ -750,7 +781,6 @@ class MirrorApp {
                     return;
                 const username = sourceUrl.split('/').pop() || '';
                 const safeUsername = this.escapeHtml(username);
-                const safeSourceUrl = this.escapeHtml(sourceUrl);
                 const row = document.createElement('div');
                 row.className = 'channel pending';
                 row.dataset.channelKey = sourceUrl;
@@ -760,7 +790,7 @@ class MirrorApp {
           <div class="avatar avatar-fallback" aria-hidden="true">${this.escapeHtml(this.channelAvatarText(username))}</div>
           <div class="channel-main">
             <div class="name">@${safeUsername}</div>
-            <div class="url">${safeSourceUrl}</div>
+            <div class="url">@${safeUsername}</div>
           </div>
           <div class="spinner"></div>
         `;
@@ -1392,14 +1422,17 @@ class MirrorApp {
         const messageSearchInput = document.getElementById('messageSearchInput');
         if (messageSearchInput?.value?.trim()) {
             messageSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+            this.refreshScrollBottomButton?.();
             return true;
         }
         if (!payload.message_count) {
             wrap.scrollTop = 0;
+            this.refreshScrollBottomButton?.();
             return true;
         }
         if (!hadMessages) {
             this.scrollToUnreadOrBottom(divider);
+            this.refreshScrollBottomButton?.();
             return true;
         }
         const applyPosition = () => {
@@ -1412,6 +1445,7 @@ class MirrorApp {
         };
         applyPosition();
         requestAnimationFrame(applyPosition);
+        this.refreshScrollBottomButton?.();
         return true;
     }
     hasBlockingModalOpen() {
@@ -1493,6 +1527,7 @@ class MirrorApp {
         this.setupChannelNavigationLoading();
         this.setupSidebarSearch();
         this.setupMessageSearch();
+        this.setupScrollToBottomButton();
         this.setupAddDomainBox();
         this.setupAddChannelBox();
         this.setupSyncDialog();

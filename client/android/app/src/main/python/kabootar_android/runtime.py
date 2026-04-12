@@ -98,7 +98,7 @@ def start_backend(
     cache_dir: str,
     port: int = 18765,
     app_name: str = "Kabootar",
-    version_name: str = "0.6.1",
+    version_name: str = "0.7.0",
     version_code: int = 8,
     release_channel: str = "stable",
 ) -> str:

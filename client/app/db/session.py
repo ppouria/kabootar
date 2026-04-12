@@ -1,14 +1,11 @@
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from app.config import ensure_data_dir, settings
 
+from .base import Base
+
 ensure_data_dir()
-
-
-class Base(DeclarativeBase):
-    pass
-
 
 engine = create_engine(settings.database_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
@@ -16,7 +13,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, futu
 
 def ensure_schema() -> None:
     # Import lazily to avoid circular import issues.
-    from app import models  # noqa: F401
+    from app.db import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
 
@@ -54,3 +51,4 @@ def ensure_schema() -> None:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN reply_text TEXT NOT NULL DEFAULT ''"))
             if "forward_source" not in msg_cols:
                 conn.execute(text("ALTER TABLE messages ADD COLUMN forward_source VARCHAR(255) NOT NULL DEFAULT ''"))
+

@@ -12,8 +12,8 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Kabootar" />
   <meta name="mobile-web-app-capable" content="yes" />
-  <link rel="stylesheet" href="/static/style.css?v=20260331j" />
-  <link rel="stylesheet" href="/static/settings.css?v=20260331e" />
+  <link rel="stylesheet" href="/static/style.css?v=20260411f" />
+  <link rel="stylesheet" href="/static/settings.css?v=20260412a" />
 </head>
 <body class="settings-page">
   <div class="settings-shell">
@@ -180,6 +180,67 @@
             <button type="button" class="btn-secondary" id="addDnsDomain" data-i18n="settings.add_domain">+ Add domain</button>
             <div class="sub" data-i18n="settings.domains_hint">Each row: domain (required) + password (optional)</div>
           </div>
+
+          <div class="field resolver-scanner-field">
+            <label class="label" data-i18n="settings.resolver_scanner_title">DNS Resolver Scanner</label>
+            <div class="resolver-scanner-source">
+              <div class="resolver-scanner-source-head">
+                <div class="resolver-scanner-source-title" data-i18n="settings.resolver_scan_input_title">IP list for scan</div>
+                <div id="resolverScanInputCount" class="resolver-scanner-source-count">Resolvers for scan: 0</div>
+              </div>
+              <textarea
+                id="resolverScanInput"
+                class="input resolver-scan-input"
+                rows="6"
+                data-i18n-placeholder="settings.resolver_scan_input_placeholder"
+                placeholder="1.1.1.1&#10;8.8.8.8&#10;9.9.9.9:53"
+              ></textarea>
+              <div class="resolver-scanner-source-actions">
+                <input id="resolverScanFileInput" type="file" accept=".txt,text/plain" hidden />
+                <button type="button" class="btn-secondary" id="resolverScanImportBtn" data-i18n="settings.resolver_scan_import_txt">Import .txt</button>
+                <button type="button" class="btn-secondary" id="resolverScanUseCurrentBtn" data-i18n="settings.resolver_scan_use_current">Use current resolvers</button>
+                <button type="button" class="btn-secondary" id="resolverScanClearBtn" data-i18n="settings.resolver_scan_clear_input">Clear input</button>
+              </div>
+            </div>
+            <div class="resolver-scanner-options">
+              <label class="toggle resolver-scan-toggle">
+                <input type="checkbox" id="resolverScanOnly" checked />
+                <span data-i18n="settings.resolver_scan_only">Scan only (do not auto set)</span>
+              </label>
+              <label class="toggle resolver-scan-toggle">
+                <input type="checkbox" id="resolverScanInlineE2e" />
+                <span data-i18n="settings.resolver_scan_inline_e2e">Run E2E automatically after scan</span>
+              </label>
+              <label class="toggle resolver-scan-toggle">
+                <input type="checkbox" id="resolverScanAutoApply" />
+                <span data-i18n="settings.resolver_scan_auto_apply">Auto set best resolver after E2E</span>
+              </label>
+              <label class="resolver-scan-sort" for="resolverSort">
+                <span data-i18n="settings.resolver_scan_sort">Sort result</span>
+                <select id="resolverSort" class="select resolver-sort-select">
+                  <option value="score_latency" data-i18n="settings.resolver_scan_sort_score">Best score</option>
+                  <option value="latency" data-i18n="settings.resolver_scan_sort_latency">Lowest latency</option>
+                  <option value="score" data-i18n="settings.resolver_scan_sort_score_only">Score only</option>
+                  <option value="resolver" data-i18n="settings.resolver_scan_sort_resolver">Resolver name</option>
+                </select>
+              </label>
+            </div>
+            <div class="resolver-scanner-actions">
+              <button type="button" class="btn-secondary" id="resolverQuickScanBtn" data-i18n="settings.resolver_scan_quick">Quick scan</button>
+              <button type="button" class="btn-secondary" id="resolverDeepScanBtn" data-i18n="settings.resolver_scan_deep">Deep scan</button>
+              <button type="button" class="btn-secondary" id="resolverPauseBtn" data-i18n="settings.resolver_scan_pause">Pause</button>
+              <button type="button" class="btn-secondary" id="resolverResumeBtn" data-i18n="settings.resolver_scan_resume">Resume</button>
+              <button type="button" class="btn-secondary btn-danger" id="resolverStopBtn" data-i18n="settings.resolver_scan_stop">End test</button>
+              <button type="button" class="btn-secondary" id="resolverRunE2eBtn" data-i18n="settings.resolver_scan_run_e2e">Run E2E on working</button>
+              <button type="button" class="btn-secondary" id="resolverSaveBtn" data-i18n="settings.resolver_scan_save_txt">Save result .txt</button>
+            </div>
+            <div class="sub" data-i18n="settings.resolver_scanner_sub">Inspired by SlipNet DNS Scanner. Quick mode checks your current resolvers, deep mode also checks a public resolver pool.</div>
+            <pre id="resolverScanConsole" class="resolver-scan-console" data-i18n="settings.resolver_scan_idle">Scanner is idle.</pre>
+            <div id="resolverScanTop" class="resolver-scan-top" hidden>
+              <div class="resolver-scan-top-title" data-i18n="settings.resolver_scan_top">Top compatible resolvers</div>
+              <div id="resolverScanTopRows" class="resolver-scan-top-rows"></div>
+            </div>
+          </div>
         </section>
       </div>
 
@@ -310,6 +371,6 @@
       </div>
     </div>
   </div>
-  <script type="module" src="/static/settings.js?v=20260331e"></script>
+  <script type="module" src="/static/settings.js?v=20260412a"></script>
 </body>
 </html>

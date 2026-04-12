@@ -30,18 +30,15 @@ jobs:
           - label: x86
             runner: windows-latest
             python_arch: x86
-            asset_name: kabootar-windows-x86.exe
-            artifact_name: kabootar-windows-x86
+            out_arch: x86
           - label: x64
             runner: windows-latest
             python_arch: x64
-            asset_name: kabootar-windows-x64.exe
-            artifact_name: kabootar-windows-x64
+            out_arch: amd64
           - label: arm64
             runner: windows-11-arm
             python_arch: arm64
-            asset_name: kabootar-windows-arm64.exe
-            artifact_name: kabootar-windows-arm64
+            out_arch: arm64
     defaults:
       run:
         shell: powershell
@@ -49,6 +46,29 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Read Version
+        shell: powershell
+        run: |
+          $versionName = "0.0.0"
+          Get-Content "..\\version.properties" | ForEach-Object {
+            if ($_ -match "^version_name=(.+)$") {
+              $versionName = $Matches[1].Trim()
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($versionName)) { $versionName = "0.0.0" }
+          $safeName = ($versionName -replace "[^A-Za-z0-9._-]", "-")
+          $versionTag = "v$safeName"
+          "VERSION_TAG=$versionTag" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare Output Names
+        shell: powershell
+        run: |
+          $arch = "${{ matrix.out_arch }}"
+          $baseName = "Kabootar-client-windows-$arch-$env:VERSION_TAG"
+          "OUT_BASENAME=$baseName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OUT_FILE=$baseName.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "ARTIFACT_NAME=$baseName" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -102,25 +122,24 @@ jobs:
             "--add-data", "..\version.properties;."
             "--add-data", "frontend\templates;frontend\templates"
             "--add-data", "frontend\static;frontend\static"
-            "--add-data", "alembic;alembic"
+            "--add-data", "app\\db\\alembic;app\\db\\alembic"
             "desktop_client.py"
           )
           python -m PyInstaller @args
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Prepare Release Asset (${{ matrix.label }})
-        if: github.event_name == 'release'
-        run: Copy-Item dist\kabootar.exe "dist\${{ matrix.asset_name }}" -Force
+      - name: Prepare Versioned EXE (${{ matrix.label }})
+        run: Copy-Item dist\kabootar.exe "dist\${{ env.OUT_FILE }}" -Force
 
       - name: Upload Artifact (${{ matrix.label }})
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: client/dist/kabootar.exe
+          name: ${{ env.ARTIFACT_NAME }}
+          path: client/dist/${{ env.OUT_FILE }}
           if-no-files-found: error
 
       - name: Publish Release Asset (${{ matrix.label }})
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: client/dist/${{ matrix.asset_name }}
+          files: client/dist/${{ env.OUT_FILE }}

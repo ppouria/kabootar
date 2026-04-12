@@ -32,8 +32,18 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from app.background_sync import background_sync_status, start_background_sync_loop
 from app.config import settings
 from app.db import SessionLocal, ensure_schema
-from app.dns_bridge import export_resolver_health, probe_dns_domain, push_channels_to_domains, sync_from_dns_domain
-from app.models import Channel, Message
+from app.db.models import Channel, Message
+from app.dns_bridge import (
+    ResolverScanController,
+    export_resolver_health,
+    parse_dns_domains_text,
+    parse_dns_resolvers_text,
+    probe_dns_domain,
+    push_channels_to_domains,
+    run_e2e_resolver_tests,
+    scan_dns_resolvers,
+    sync_from_dns_domain,
+)
 from app.runtime_debug import record_event, runtime_summary, setup_logging, snapshot_events, tail_log_lines
 from app.service import sync_once
 from app.settings_store import all_settings, apply_sync_cron, get_setting, set_setting, set_settings_bulk
@@ -44,6 +54,10 @@ logger = logging.getLogger("kabootar.web")
 _SYNC_JOBS_LOCK = threading.Lock()
 _SYNC_JOBS: dict[str, dict] = {}
 _SYNC_JOB_TTL_SECONDS = 1800
+_RESOLVER_SCAN_JOBS_LOCK = threading.Lock()
+_RESOLVER_SCAN_JOBS: dict[str, dict] = {}
+_RESOLVER_SCAN_CONTROLS: dict[str, ResolverScanController] = {}
+_RESOLVER_SCAN_JOB_TTL_SECONDS = 1800
 _APP_AUTH_COOKIE = "kabootar_app_auth"
 
 
@@ -88,6 +102,310 @@ def _new_sync_job() -> dict:
         "_domains": {},
         "_channels": {},
     }
+
+
+def _cleanup_resolver_scan_jobs_locked(now_ts: float | None = None) -> None:
+    now_ts = now_ts if now_ts is not None else time.time()
+    stale: list[str] = []
+    for job_id, job in _RESOLVER_SCAN_JOBS.items():
+        finished_at = float(job.get("finished_at") or 0.0)
+        if finished_at and now_ts - finished_at > _RESOLVER_SCAN_JOB_TTL_SECONDS:
+            stale.append(job_id)
+    for job_id in stale:
+        _RESOLVER_SCAN_JOBS.pop(job_id, None)
+        _RESOLVER_SCAN_CONTROLS.pop(job_id, None)
+
+
+def _new_resolver_scan_job(payload: dict[str, object]) -> dict[str, object]:
+    now_ts = time.time()
+    mode = str(payload.get("scan_mode") or "quick")
+    phase = str(payload.get("phase") or "scan")
+    domain = str(payload.get("domain") or "")
+    return {
+        "id": secrets.token_hex(8),
+        "status": "queued",
+        "phase": "queued",
+        "phase_kind": phase,
+        "message": "Queued",
+        "started_at": now_ts,
+        "finished_at": 0.0,
+        "elapsed_seconds": 0,
+        "progress_percent": 0.0,
+        "scan_mode": mode,
+        "domain": domain,
+        "total": 0,
+        "scanned": 0,
+        "working": 0,
+        "timeout": 0,
+        "error_count": 0,
+        "e2e_total": 0,
+        "e2e_tested": 0,
+        "e2e_passed": 0,
+        "transparent_proxy_detected": None,
+        "selected_resolver": "",
+        "auto_applied": False,
+        "applied_resolvers": [],
+        "stop_requested": False,
+        "stopped": False,
+        "control_state": "running",
+        "result": None,
+        "error": "",
+    }
+
+
+def _parse_bool(value: object, default: bool = False) -> bool:
+    if value is None:
+        return default
+    raw = str(value).strip().lower()
+    if raw in {"", "none"}:
+        return default
+    return raw not in {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _resolver_scan_job_public(job: dict[str, object]) -> dict[str, object]:
+    elapsed = max(
+        0,
+        int(
+            (float(job.get("finished_at") or 0.0) or time.time())
+            - float(job.get("started_at") or time.time())
+        ),
+    )
+    return {
+        "id": job.get("id", ""),
+        "status": job.get("status", "queued"),
+        "phase": job.get("phase", "queued"),
+        "message": job.get("message", ""),
+        "scan_mode": job.get("scan_mode", "quick"),
+        "domain": job.get("domain", ""),
+        "phase_kind": job.get("phase_kind", "scan"),
+        "progress_percent": float(job.get("progress_percent", 0.0) or 0.0),
+        "elapsed_seconds": elapsed,
+        "total": int(job.get("total", 0) or 0),
+        "scanned": int(job.get("scanned", 0) or 0),
+        "working": int(job.get("working", 0) or 0),
+        "timeout": int(job.get("timeout", 0) or 0),
+        "error_count": int(job.get("error_count", 0) or 0),
+        "e2e_total": int(job.get("e2e_total", 0) or 0),
+        "e2e_tested": int(job.get("e2e_tested", 0) or 0),
+        "e2e_passed": int(job.get("e2e_passed", 0) or 0),
+        "transparent_proxy_detected": job.get("transparent_proxy_detected"),
+        "selected_resolver": job.get("selected_resolver", ""),
+        "auto_applied": bool(job.get("auto_applied")),
+        "applied_resolvers": list(job.get("applied_resolvers") or []),
+        "stop_requested": bool(job.get("stop_requested")),
+        "stopped": bool(job.get("stopped")),
+        "control_state": str(job.get("control_state") or "running"),
+        "result": job.get("result"),
+        "error": job.get("error", ""),
+    }
+
+
+def _get_active_resolver_scan_job_locked() -> dict[str, object] | None:
+    active: dict[str, object] | None = None
+    for job in _RESOLVER_SCAN_JOBS.values():
+        if str(job.get("status")) in {"queued", "running", "paused"}:
+            if active is None or float(job.get("started_at", 0) or 0) > float(active.get("started_at", 0) or 0):
+                active = job
+    return active
+
+
+def _apply_resolver_scan_event_locked(job: dict[str, object], event: dict[str, object]) -> None:
+    kind = str(event.get("kind") or "").strip().lower()
+    if kind == "scan_start":
+        job["status"] = "running"
+        job["phase"] = "scan"
+        job["phase_kind"] = "scan"
+        job["control_state"] = "running"
+        job["message"] = "Scanning resolvers"
+        job["total"] = int(event.get("total", 0) or 0)
+        job["domain"] = str(event.get("domain") or job.get("domain") or "")
+        job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 0.5)
+    elif kind == "transparent_proxy":
+        job["transparent_proxy_detected"] = bool(event.get("detected"))
+    elif kind == "scan_progress":
+        if str(job.get("status") or "") == "paused":
+            return
+        total = max(0, int(event.get("total", 0) or 0))
+        scanned = max(0, int(event.get("scanned", 0) or 0))
+        working = max(0, int(event.get("working", 0) or 0))
+        timeout = max(0, int(event.get("timeout", 0) or 0))
+        error_count = max(0, int(event.get("error", 0) or 0))
+        job["phase"] = "scan"
+        job["message"] = f"Scanning... {scanned}/{total} (working: {working})"
+        job["total"] = max(int(job.get("total", 0) or 0), total)
+        job["scanned"] = max(int(job.get("scanned", 0) or 0), scanned)
+        job["working"] = max(int(job.get("working", 0) or 0), working)
+        job["timeout"] = max(int(job.get("timeout", 0) or 0), timeout)
+        job["error_count"] = max(int(job.get("error_count", 0) or 0), error_count)
+        if total > 0:
+            ratio = min(1.0, float(scanned) / float(total))
+            job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), round(ratio * 70.0, 1))
+    elif kind == "e2e_start":
+        total = max(0, int(event.get("total", 0) or 0))
+        job["status"] = "running"
+        job["phase"] = "e2e"
+        job["phase_kind"] = "e2e"
+        job["control_state"] = "running"
+        job["message"] = "Running E2E checks"
+        job["e2e_total"] = total
+        if total == 0:
+            job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 95.0)
+    elif kind == "e2e_progress":
+        if str(job.get("status") or "") == "paused":
+            return
+        tested = max(0, int(event.get("tested", 0) or 0))
+        total = max(0, int(event.get("total", 0) or 0))
+        passed = max(0, int(event.get("passed", 0) or 0))
+        job["phase"] = "e2e"
+        job["message"] = f"E2E... {tested}/{total} (passed: {passed})"
+        job["e2e_total"] = max(int(job.get("e2e_total", 0) or 0), total)
+        job["e2e_tested"] = max(int(job.get("e2e_tested", 0) or 0), tested)
+        job["e2e_passed"] = max(int(job.get("e2e_passed", 0) or 0), passed)
+        if total > 0:
+            ratio = min(1.0, float(tested) / float(total))
+            job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), round(70.0 + (ratio * 30.0), 1))
+    elif kind == "scan_done":
+        result = event.get("result") if isinstance(event.get("result"), dict) else {}
+        mode = str(result.get("mode") or "scan").strip().lower()
+        stopped = bool(result.get("stopped"))
+        job["phase_kind"] = "e2e" if mode == "e2e" else "scan"
+        job["status"] = "stopped" if stopped else "done"
+        job["phase"] = "stopped" if stopped else "done"
+        if stopped:
+            job["message"] = "Scan stopped by user" if mode != "e2e" else "E2E stopped by user"
+            job["progress_percent"] = min(99.0, max(float(job.get("progress_percent", 0.0) or 0.0), 1.0))
+        else:
+            job["message"] = "E2E complete" if mode == "e2e" else "Scan complete"
+            job["progress_percent"] = 100.0
+        job["finished_at"] = time.time()
+        job["stopped"] = stopped
+        job["control_state"] = "stopped" if stopped else "completed"
+        job["result"] = result
+        job["selected_resolver"] = str(result.get("selected_resolver") or "")
+        job["auto_applied"] = bool(result.get("auto_applied"))
+        job["applied_resolvers"] = list(result.get("applied_resolvers") or [])
+        job["total"] = max(int(job.get("total", 0) or 0), int(result.get("total", 0) or 0))
+        job["scanned"] = max(int(job.get("scanned", 0) or 0), int(result.get("scanned", 0) or 0))
+        job["working"] = max(int(job.get("working", 0) or 0), int(result.get("working", 0) or 0))
+        job["timeout"] = max(int(job.get("timeout", 0) or 0), int(result.get("timeout", 0) or 0))
+        job["error_count"] = max(int(job.get("error_count", 0) or 0), int(result.get("error", 0) or 0))
+        if mode == "e2e":
+            job["e2e_total"] = max(int(job.get("e2e_total", 0) or 0), int(result.get("total", 0) or 0))
+            job["e2e_tested"] = max(int(job.get("e2e_tested", 0) or 0), int(result.get("tested", 0) or 0))
+            job["e2e_passed"] = max(int(job.get("e2e_passed", 0) or 0), int(result.get("passed", 0) or 0))
+        else:
+            e2e = result.get("e2e") if isinstance(result.get("e2e"), dict) else {}
+            job["e2e_total"] = max(int(job.get("e2e_total", 0) or 0), int(e2e.get("tested", 0) or 0))
+            job["e2e_tested"] = max(int(job.get("e2e_tested", 0) or 0), int(e2e.get("tested", 0) or 0))
+            job["e2e_passed"] = max(int(job.get("e2e_passed", 0) or 0), int(e2e.get("passed", 0) or 0))
+
+
+def _run_resolver_scan_job(job_id: str, options: dict[str, object]) -> None:
+    control: ResolverScanController | None = None
+    with _RESOLVER_SCAN_JOBS_LOCK:
+        control = _RESOLVER_SCAN_CONTROLS.get(job_id)
+
+    def _progress(event: dict[str, object]) -> None:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            _apply_resolver_scan_event_locked(job, event)
+
+    try:
+        result = scan_dns_resolvers(
+            domain=str(options.get("domain") or ""),
+            password=str(options.get("password") or ""),
+            resolvers=parse_dns_resolvers_text(str(options.get("resolvers_raw") or ""), use_system=False),
+            include_public_pool=bool(options.get("include_public_pool")),
+            timeout_ms=int(options.get("timeout_ms", 1800) or 1800),
+            concurrency=int(options.get("concurrency", 96) or 96),
+            query_size=int(options.get("query_size", 220) or 220),
+            e2e_enabled=bool(options.get("e2e_enabled", True)),
+            e2e_threshold=int(options.get("e2e_threshold", 4) or 4),
+            e2e_max_candidates=int(options.get("e2e_max_candidates", 48) or 48),
+            e2e_concurrency=int(options.get("e2e_concurrency", 8) or 8),
+            auto_apply_best=bool(options.get("auto_apply_best", False)),
+            control=control,
+            progress=_progress,
+        )
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            _apply_resolver_scan_event_locked(job, {"kind": "scan_done", "result": result})
+    except Exception as exc:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            if control and control.is_stopped():
+                job["status"] = "stopped"
+                job["phase"] = "stopped"
+                job["control_state"] = "stopped"
+                job["stopped"] = True
+                job["message"] = "Scan stopped by user"
+            else:
+                job["status"] = "error"
+                job["phase"] = "error"
+                job["control_state"] = "error"
+                job["message"] = f"Scan failed: {exc}"
+            job["finished_at"] = time.time()
+            job["error"] = str(exc)
+            job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 1.0)
+    finally:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _RESOLVER_SCAN_CONTROLS.pop(job_id, None)
+
+
+def _run_resolver_e2e_job(job_id: str, options: dict[str, object]) -> None:
+    control: ResolverScanController | None = None
+    with _RESOLVER_SCAN_JOBS_LOCK:
+        control = _RESOLVER_SCAN_CONTROLS.get(job_id)
+
+    def _progress(event: dict[str, object]) -> None:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            _apply_resolver_scan_event_locked(job, event)
+
+    try:
+        result = run_e2e_resolver_tests(
+            domain=str(options.get("domain") or ""),
+            password=str(options.get("password") or ""),
+            resolvers=parse_dns_resolvers_text(str(options.get("resolvers_raw") or ""), use_system=False),
+            concurrency=int(options.get("e2e_concurrency", 8) or 8),
+            control=control,
+            progress=_progress,
+        )
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            _apply_resolver_scan_event_locked(job, {"kind": "scan_done", "result": result})
+    except Exception as exc:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            job = _RESOLVER_SCAN_JOBS.get(job_id)
+            if not job:
+                return
+            if control and control.is_stopped():
+                job["status"] = "stopped"
+                job["phase"] = "stopped"
+                job["control_state"] = "stopped"
+                job["stopped"] = True
+                job["message"] = "E2E stopped by user"
+            else:
+                job["status"] = "error"
+                job["phase"] = "error"
+                job["control_state"] = "error"
+                job["message"] = f"E2E failed: {exc}"
+            job["finished_at"] = time.time()
+            job["error"] = str(exc)
+            job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 1.0)
+    finally:
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _RESOLVER_SCAN_CONTROLS.pop(job_id, None)
 
 
 def _channel_label(source_url: str, channel_index: int | None = None) -> str:
@@ -1398,6 +1716,306 @@ def create_app() -> Flask:
         if domain not in data:
             return jsonify({"ok": False, "domain": domain, "error": "no_history", "checked_at": 0})
         return jsonify(data[domain])
+
+    @app.post("/dns/resolvers/scan/start")
+    def dns_resolvers_scan_start():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
+
+        payload = request.get_json(silent=True) or request.form or {}
+        scan_mode = str(payload.get("scan_mode") or payload.get("mode") or "quick").strip().lower()
+        include_public_pool = scan_mode in {"deep", "full", "public", "extended"}
+
+        resolver_lines: list[str] = []
+        resolvers_raw_input = str(payload.get("dns_resolvers") or get_setting("dns_resolvers", "") or "")
+        for raw in resolvers_raw_input.splitlines():
+            normalized = _normalize_resolver_line(raw)
+            if normalized:
+                resolver_lines.append(normalized)
+        resolver_lines = list(dict.fromkeys(resolver_lines))
+        resolvers_raw = "\n".join(resolver_lines)
+
+        domain_lines: list[str] = []
+        domains_raw_input = str(payload.get("dns_domains") or get_setting("dns_domains", "") or "")
+        for raw in domains_raw_input.splitlines():
+            normalized = _normalize_dns_domain_line(raw)
+            if normalized:
+                domain_lines.append(normalized)
+        domain_lines = list(dict.fromkeys(domain_lines))
+        domains_raw = "\n".join(domain_lines)
+
+        requested_domain = _normalize_domain_host(str(payload.get("domain") or ""))
+        requested_password = str(payload.get("password") or "").strip()
+        domain_targets = parse_dns_domains_text(domains_raw)
+        if not requested_domain and domain_targets:
+            requested_domain = domain_targets[0].domain
+        if requested_domain and not requested_password:
+            for item in domain_targets:
+                if item.domain == requested_domain and item.password:
+                    requested_password = item.password
+                    break
+
+        timeout_seconds_raw = str(payload.get("dns_timeout_seconds") or get_setting("dns_timeout_seconds", "3") or "3").strip()
+        try:
+            timeout_seconds = float(timeout_seconds_raw)
+        except Exception:
+            timeout_seconds = 3.0
+        timeout_ms = int(max(0.5, min(6.0, timeout_seconds)) * 1000.0)
+
+        query_size_raw = str(payload.get("dns_query_size") or get_setting("dns_query_size", "220") or "220").strip()
+        try:
+            query_size = int(query_size_raw)
+        except Exception:
+            query_size = 220
+
+        concurrency_raw = str(payload.get("scan_concurrency") or "").strip()
+        try:
+            concurrency = int(concurrency_raw) if concurrency_raw else (112 if include_public_pool else 64)
+        except Exception:
+            concurrency = 112 if include_public_pool else 64
+        concurrency = max(4, min(256, concurrency))
+
+        e2e_enabled_raw_value = payload.get("e2e_enabled")
+        if e2e_enabled_raw_value is None:
+            e2e_enabled_raw_value = payload.get("e2e")
+        if e2e_enabled_raw_value is None:
+            e2e_enabled_raw_value = payload.get("inline_e2e")
+        e2e_enabled = _parse_bool(e2e_enabled_raw_value, default=False)
+
+        e2e_threshold_raw = str(payload.get("e2e_threshold") or "4").strip()
+        try:
+            e2e_threshold = int(e2e_threshold_raw)
+        except Exception:
+            e2e_threshold = 4
+        e2e_max_raw = str(payload.get("e2e_max_candidates") or "").strip()
+        try:
+            e2e_max_candidates = int(e2e_max_raw) if e2e_max_raw else (80 if include_public_pool else 32)
+        except Exception:
+            e2e_max_candidates = 80 if include_public_pool else 32
+        e2e_concurrency_raw = str(payload.get("e2e_concurrency") or "").strip()
+        try:
+            e2e_concurrency = int(e2e_concurrency_raw) if e2e_concurrency_raw else 8
+        except Exception:
+            e2e_concurrency = 8
+
+        auto_apply_raw_value = payload.get("auto_apply_best")
+        if auto_apply_raw_value is None:
+            auto_apply_raw_value = payload.get("auto_apply")
+        auto_apply_best = _parse_bool(auto_apply_raw_value, default=False)
+
+        scan_only_raw_value = payload.get("scan_only")
+        if scan_only_raw_value is None:
+            scan_only_raw_value = payload.get("no_auto_apply")
+        scan_only = _parse_bool(scan_only_raw_value, default=False)
+        if scan_only:
+            auto_apply_best = False
+        if auto_apply_best:
+            # Auto-apply relies on verified E2E pass.
+            e2e_enabled = True
+
+        options = {
+            "phase": "scan",
+            "scan_mode": scan_mode,
+            "domain": requested_domain,
+            "password": requested_password,
+            "resolvers_raw": resolvers_raw,
+            "include_public_pool": include_public_pool,
+            "timeout_ms": timeout_ms,
+            "concurrency": concurrency,
+            "query_size": query_size,
+            "e2e_enabled": e2e_enabled,
+            "e2e_threshold": e2e_threshold,
+            "e2e_max_candidates": e2e_max_candidates,
+            "e2e_concurrency": e2e_concurrency,
+            "auto_apply_best": auto_apply_best,
+            "scan_only": scan_only,
+        }
+
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _cleanup_resolver_scan_jobs_locked()
+            active = _get_active_resolver_scan_job_locked()
+            if active:
+                payload_job = _resolver_scan_job_public(active)
+                payload_job["reused"] = True
+                return jsonify({"ok": True, "job": payload_job})
+
+            job = _new_resolver_scan_job(options)
+            _RESOLVER_SCAN_JOBS[str(job["id"])] = job
+            _RESOLVER_SCAN_CONTROLS[str(job["id"])] = ResolverScanController()
+            payload_job = _resolver_scan_job_public(job)
+
+        threading.Thread(target=_run_resolver_scan_job, args=(str(job["id"]), options), daemon=True).start()
+        record_event(
+            "resolver_scan_requested",
+            mode=scan_mode,
+            include_public=include_public_pool,
+            auto_apply=auto_apply_best,
+            inline_e2e=e2e_enabled,
+            scan_only=scan_only,
+            resolver_count=len(resolver_lines),
+            domain=requested_domain,
+        )
+        return jsonify({"ok": True, "job": payload_job})
+
+    @app.post("/dns/resolvers/scan/control")
+    def dns_resolvers_scan_control():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
+
+        payload = request.get_json(silent=True) or request.form or {}
+        action = str(payload.get("action") or "").strip().lower()
+        if action not in {"pause", "resume", "start", "stop", "end", "cancel"}:
+            return jsonify({"ok": False, "error": "invalid_action"}), 400
+        requested_id = str(payload.get("id") or payload.get("job_id") or "").strip()
+
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _cleanup_resolver_scan_jobs_locked()
+            job = _RESOLVER_SCAN_JOBS.get(requested_id) if requested_id else _get_active_resolver_scan_job_locked()
+            if not job:
+                return jsonify({"ok": False, "error": "not_found"}), 404
+
+            job_id = str(job.get("id") or "")
+            status = str(job.get("status") or "")
+            if status in {"done", "error", "stopped"}:
+                return jsonify({"ok": False, "error": "job_not_running", "job": _resolver_scan_job_public(job)}), 409
+
+            control = _RESOLVER_SCAN_CONTROLS.get(job_id)
+            if not control:
+                return jsonify({"ok": False, "error": "job_not_running", "job": _resolver_scan_job_public(job)}), 409
+
+            if action == "pause":
+                control.pause()
+                job["status"] = "paused"
+                job["control_state"] = "paused"
+                job["message"] = "Paused by user"
+            elif action in {"resume", "start"}:
+                control.resume()
+                job["status"] = "running"
+                job["control_state"] = "running"
+                if str(job.get("phase") or "") == "e2e":
+                    job["message"] = "E2E resumed"
+                else:
+                    job["message"] = "Scan resumed"
+            else:
+                control.stop()
+                job["stop_requested"] = True
+                job["control_state"] = "stopping"
+                if str(job.get("phase") or "") == "e2e":
+                    job["message"] = "Stopping E2E..."
+                else:
+                    job["message"] = "Stopping scan..."
+
+            payload_job = _resolver_scan_job_public(job)
+
+        record_event("resolver_scan_control", action=action, job_id=job_id)
+        return jsonify({"ok": True, "job": payload_job})
+
+    @app.post("/dns/resolvers/e2e/start")
+    def dns_resolvers_e2e_start():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
+
+        payload = request.get_json(silent=True) or request.form or {}
+
+        resolver_lines: list[str] = []
+        resolver_list = payload.get("resolvers")
+        if isinstance(resolver_list, list):
+            for token in resolver_list:
+                normalized = _normalize_resolver_line(str(token or ""))
+                if normalized:
+                    resolver_lines.append(normalized)
+        else:
+            resolvers_raw_input = str(payload.get("dns_resolvers") or payload.get("resolvers") or "")
+            for raw in resolvers_raw_input.splitlines():
+                normalized = _normalize_resolver_line(raw)
+                if normalized:
+                    resolver_lines.append(normalized)
+
+        if not resolver_lines:
+            for raw in str(get_setting("dns_resolvers", "") or "").splitlines():
+                normalized = _normalize_resolver_line(raw)
+                if normalized:
+                    resolver_lines.append(normalized)
+        resolver_lines = list(dict.fromkeys(resolver_lines))
+        if not resolver_lines:
+            return jsonify({"ok": False, "error": "resolver_required"}), 400
+        resolvers_raw = "\n".join(resolver_lines)
+
+        domain_lines: list[str] = []
+        domains_raw_input = str(payload.get("dns_domains") or get_setting("dns_domains", "") or "")
+        for raw in domains_raw_input.splitlines():
+            normalized = _normalize_dns_domain_line(raw)
+            if normalized:
+                domain_lines.append(normalized)
+        domain_lines = list(dict.fromkeys(domain_lines))
+        domains_raw = "\n".join(domain_lines)
+
+        requested_domain = _normalize_domain_host(str(payload.get("domain") or ""))
+        requested_password = str(payload.get("password") or "").strip()
+        domain_targets = parse_dns_domains_text(domains_raw)
+        if not requested_domain and domain_targets:
+            requested_domain = domain_targets[0].domain
+        if requested_domain and not requested_password:
+            for item in domain_targets:
+                if item.domain == requested_domain and item.password:
+                    requested_password = item.password
+                    break
+
+        e2e_concurrency_raw = str(payload.get("e2e_concurrency") or "").strip()
+        try:
+            e2e_concurrency = int(e2e_concurrency_raw) if e2e_concurrency_raw else 8
+        except Exception:
+            e2e_concurrency = 8
+        e2e_concurrency = max(1, min(32, e2e_concurrency))
+
+        options = {
+            "phase": "e2e",
+            "scan_mode": "e2e",
+            "domain": requested_domain,
+            "password": requested_password,
+            "resolvers_raw": resolvers_raw,
+            "e2e_concurrency": e2e_concurrency,
+        }
+
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _cleanup_resolver_scan_jobs_locked()
+            active = _get_active_resolver_scan_job_locked()
+            if active:
+                payload_job = _resolver_scan_job_public(active)
+                payload_job["reused"] = True
+                return jsonify({"ok": True, "job": payload_job})
+
+            job = _new_resolver_scan_job(options)
+            _RESOLVER_SCAN_JOBS[str(job["id"])] = job
+            _RESOLVER_SCAN_CONTROLS[str(job["id"])] = ResolverScanController()
+            payload_job = _resolver_scan_job_public(job)
+
+        threading.Thread(target=_run_resolver_e2e_job, args=(str(job["id"]), options), daemon=True).start()
+        record_event(
+            "resolver_e2e_requested",
+            resolver_count=len(resolver_lines),
+            domain=requested_domain,
+            concurrency=e2e_concurrency,
+        )
+        return jsonify({"ok": True, "job": payload_job})
+
+    @app.get("/dns/resolvers/scan/status")
+    def dns_resolvers_scan_status():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
+        job_id = (request.args.get("id") or "").strip()
+        with _RESOLVER_SCAN_JOBS_LOCK:
+            _cleanup_resolver_scan_jobs_locked()
+            job = _RESOLVER_SCAN_JOBS.get(job_id) if job_id else _get_active_resolver_scan_job_locked()
+            if not job:
+                if job_id:
+                    return jsonify({"ok": False, "error": "not_found"}), 404
+                # fallback to most recent finished job
+                if _RESOLVER_SCAN_JOBS:
+                    latest = max(_RESOLVER_SCAN_JOBS.values(), key=lambda x: float(x.get("started_at", 0) or 0))
+                    return jsonify({"ok": True, "job": _resolver_scan_job_public(latest)})
+                return jsonify({"ok": False, "error": "not_found"}), 404
+            return jsonify({"ok": True, "job": _resolver_scan_job_public(job)})
 
     @app.post('/sync-now')
     def sync_now():

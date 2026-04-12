@@ -26,7 +26,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt manage.py alembic.ini ./
-COPY alembic ./alembic
+COPY app/db/alembic ./app/db/alembic
 COPY app ./app
 COPY frontend ./frontend
 COPY docker-entrypoint.sh ./docker-entrypoint.sh

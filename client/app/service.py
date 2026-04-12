@@ -6,8 +6,8 @@ from typing import Callable, Optional
 from sqlalchemy import select
 
 from app.db import SessionLocal, ensure_schema
+from app.db.models import Channel, Message
 from app.dns_bridge import load_dns_domains, push_channels_to_domains, sync_from_dns_to_main_db
-from app.models import Channel, Message
 from app.runtime_debug import record_event, setup_logging
 from app.scraper import (
     fetch_html_with_proxies,

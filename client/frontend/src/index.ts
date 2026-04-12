@@ -57,6 +57,7 @@ class MirrorApp {
   private readonly dnsDomainsCount: number;
   private autoRefreshTimer: number | null = null;
   private refreshSidebarSearch: (() => void) | null = null;
+  private refreshScrollBottomButton: (() => void) | null = null;
   private lang: 'fa' | 'en' = 'fa';
   private i18n: Record<string, string> = {};
 
@@ -443,6 +444,38 @@ class MirrorApp {
     setTimeout(() => {
       autoPin = false;
     }, 900);
+  }
+
+  private setupScrollToBottomButton(): void {
+    const wrap = document.getElementById('messages') as HTMLElement | null;
+    const button = document.getElementById('scrollToBottomBtn') as HTMLButtonElement | null;
+    if (!wrap || !button) return;
+
+    let raf = 0;
+    const update = () => {
+      const distanceFromBottom = Math.max(0, wrap.scrollHeight - wrap.scrollTop - wrap.clientHeight);
+      const threshold = Math.max(0, wrap.clientHeight);
+      const visible = distanceFromBottom > threshold;
+      button.hidden = !visible;
+      button.classList.toggle('visible', visible);
+    };
+    const requestUpdate = () => {
+      if (raf) return;
+      raf = window.requestAnimationFrame(() => {
+        raf = 0;
+        update();
+      });
+    };
+
+    wrap.addEventListener('scroll', requestUpdate, { passive: true });
+    window.addEventListener('resize', requestUpdate, { passive: true });
+    button.addEventListener('click', () => {
+      wrap.scrollTo({ top: wrap.scrollHeight, behavior: 'smooth' });
+      requestUpdate();
+    });
+
+    this.refreshScrollBottomButton = requestUpdate;
+    requestUpdate();
   }
 
   private setupMobileMenu(): void {
@@ -836,7 +869,6 @@ class MirrorApp {
         if (sidebar.querySelector(`.channel[data-channel-key="${sourceUrl}"]`)) return;
         const username = sourceUrl.split('/').pop() || '';
         const safeUsername = this.escapeHtml(username);
-        const safeSourceUrl = this.escapeHtml(sourceUrl);
         const row = document.createElement('div');
         row.className = 'channel pending';
         row.dataset.channelKey = sourceUrl;
@@ -846,7 +878,7 @@ class MirrorApp {
           <div class="avatar avatar-fallback" aria-hidden="true">${this.escapeHtml(this.channelAvatarText(username))}</div>
           <div class="channel-main">
             <div class="name">@${safeUsername}</div>
-            <div class="url">${safeSourceUrl}</div>
+            <div class="url">@${safeUsername}</div>
           </div>
           <div class="spinner"></div>
         `;
@@ -1479,16 +1511,19 @@ class MirrorApp {
     const messageSearchInput = document.getElementById('messageSearchInput') as HTMLInputElement | null;
     if (messageSearchInput?.value?.trim()) {
       messageSearchInput.dispatchEvent(new Event('input', { bubbles: true }));
+      this.refreshScrollBottomButton?.();
       return true;
     }
 
     if (!payload.message_count) {
       wrap.scrollTop = 0;
+      this.refreshScrollBottomButton?.();
       return true;
     }
 
     if (!hadMessages) {
       this.scrollToUnreadOrBottom(divider);
+      this.refreshScrollBottomButton?.();
       return true;
     }
 
@@ -1503,6 +1538,7 @@ class MirrorApp {
 
     applyPosition();
     requestAnimationFrame(applyPosition);
+    this.refreshScrollBottomButton?.();
     return true;
   }
 
@@ -1588,6 +1624,7 @@ class MirrorApp {
     this.setupChannelNavigationLoading();
     this.setupSidebarSearch();
     this.setupMessageSearch();
+    this.setupScrollToBottomButton();
     this.setupAddDomainBox();
     this.setupAddChannelBox();
     this.setupSyncDialog();

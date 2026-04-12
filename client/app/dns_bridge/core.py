@@ -16,13 +16,18 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+import dns.exception
+import dns.message
+import dns.query
+import dns.rcode
+import dns.rdatatype
 import dns.resolver
 from dnslib import QTYPE, RCODE, RR, TXT, DNSRecord
 from dnslib.server import BaseResolver, DNSServer
 from sqlalchemy import select
 
 from app.db import SessionLocal, ensure_schema
-from app.models import Channel, Message
+from app.db.models import Channel, Message
 from app.runtime_debug import record_event, setup_logging
 from app.scraper import (
     fetch_html_with_proxies,
@@ -705,6 +710,16 @@ def load_dns_domains(route_text: str | None = None, domain_text: str | None = No
     return [DnsDomainTarget(domain=d, password=pw) for d, pw in ordered.items()]
 
 
+def parse_dns_domains_text(raw: str) -> list[DnsDomainTarget]:
+    ordered: dict[str, str] = {}
+    for domain, password in _domain_entries(raw):
+        if domain not in ordered:
+            ordered[domain] = ""
+        if password:
+            ordered[domain] = password
+    return [DnsDomainTarget(domain=d, password=pw) for d, pw in ordered.items()]
+
+
 def _parse_resolver_target(raw: str) -> DnsResolverTarget | None:
     token = (raw or "").strip()
     if not token:
@@ -765,9 +780,6 @@ def _legacy_resolvers() -> list[DnsResolverTarget]:
 
 def load_dns_resolvers() -> list[DnsResolverTarget]:
     use_system = (get_setting("dns_use_system_resolver", "1") or "1") == "1"
-    if use_system:
-        return [DnsResolverTarget(use_system=True)]
-
     out: list[DnsResolverTarget] = []
     raw = (get_setting("dns_resolvers", "") or "").strip()
     for line in raw.splitlines():
@@ -777,12 +789,24 @@ def load_dns_resolvers() -> list[DnsResolverTarget]:
 
     if not out:
         out = _legacy_resolvers()
-    if not out:
-        out = [DnsResolverTarget(use_system=True)]
-
     dedup: dict[str, DnsResolverTarget] = {}
+    if use_system:
+        dedup["system"] = DnsResolverTarget(use_system=True)
     for item in out:
         dedup[item.key] = item
+    if not dedup:
+        dedup["system"] = DnsResolverTarget(use_system=True)
+    return list(dedup.values())
+
+
+def parse_dns_resolvers_text(raw: str, use_system: bool = False) -> list[DnsResolverTarget]:
+    dedup: dict[str, DnsResolverTarget] = {}
+    if use_system:
+        dedup["system"] = DnsResolverTarget(use_system=True)
+    for line in (raw or "").splitlines():
+        parsed = _parse_resolver_target(line)
+        if parsed:
+            dedup[parsed.key] = parsed
     return list(dedup.values())
 
 
@@ -872,6 +896,16 @@ def _query_retry_count() -> int:
     except Exception:
         n = 4
     return max(1, min(6, n))
+
+
+def _query_retry_plan(target_count: int) -> list[int]:
+    total = _query_retry_count()
+    if target_count <= 1:
+        return [total]
+    if total <= 1:
+        return [1]
+    # Fast failover pass first, then a deeper retry pass if everybody failed.
+    return [1, total - 1]
 
 
 def _txt_answer_bytes(ans) -> list[bytes]:
@@ -1089,34 +1123,83 @@ def _query_txt_single(name: str, target: DnsResolverTarget, retries: int | None 
     raise RuntimeError("dns_query_failed:unknown")
 
 
-def _query_txt_sequential(name: str, ordered: list[DnsResolverTarget]) -> list[bytes]:
+def _query_txt_sequential(name: str, ordered: list[DnsResolverTarget], retry_plan: list[int] | None = None) -> list[bytes]:
+    if not ordered:
+        raise RuntimeError(f"dns_query_failed:{name}:no_resolver")
+    plan = [max(1, int(x)) for x in (retry_plan or _query_retry_plan(len(ordered))) if int(x) > 0]
+    if not plan:
+        plan = [1]
+
     last_exc: Exception | None = None
-    for target in ordered:
-        try:
-            return _query_txt_single(name, target)
-        except Exception as exc:
-            last_exc = exc
+    for round_index, retries in enumerate(plan, start=1):
+        for target in ordered:
+            try:
+                return _query_txt_single(name, target, retries=retries)
+            except Exception as exc:
+                last_exc = exc
+        if round_index < len(plan):
+            time.sleep(0.08 * round_index)
     raise RuntimeError(f"dns_query_failed:{name}:{last_exc}")
 
 
-def _query_txt_parallel(name: str, primary: list[DnsResolverTarget], spares: list[DnsResolverTarget]) -> list[bytes]:
+def _query_txt_parallel(
+    name: str,
+    primary: list[DnsResolverTarget],
+    spares: list[DnsResolverTarget],
+    retry_plan: list[int] | None = None,
+) -> list[bytes]:
+    if not primary:
+        return _query_txt_sequential(name, spares, retry_plan=retry_plan)
+
+    plan = [max(1, int(x)) for x in (retry_plan or _query_retry_plan(len(primary) + len(spares))) if int(x) > 0]
+    if not plan:
+        plan = [1]
+
+    round_one_retries = plan[0]
     last_exc: Exception | None = None
-    with ThreadPoolExecutor(max_workers=len(primary)) as executor:
-        futures = {executor.submit(_query_txt_single, name, target): target for target in primary}
+    executor = ThreadPoolExecutor(max_workers=len(primary))
+    futures = {executor.submit(_query_txt_single, name, target, round_one_retries): target for target in primary}
+    try:
         for future in as_completed(futures):
             try:
-                return future.result()
+                result = future.result()
+                for pending in futures:
+                    if pending is not future:
+                        pending.cancel()
+                return result
             except Exception as exc:
                 last_exc = exc
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
+    combined: list[DnsResolverTarget] = []
+    seen: set[str] = set()
+    for target in [*primary, *spares]:
+        if target.key in seen:
+            continue
+        seen.add(target.key)
+        combined.append(target)
+
+    remaining_plan = plan[1:]
     try:
-        return _query_txt_sequential(name, primary)
+        if remaining_plan:
+            return _query_txt_sequential(name, combined, retry_plan=remaining_plan)
+        if spares:
+            return _query_txt_sequential(name, spares, retry_plan=[1])
     except Exception as exc:
         last_exc = exc
 
-    if spares:
-        return _query_txt_sequential(name, spares)
     raise RuntimeError(f"dns_query_failed_parallel:{name}:{last_exc}")
+
+
+def _parallel_query_mode() -> str:
+    # always | smart | off
+    raw = (os.getenv("DNS_RESOLVER_PARALLEL_MODE", "always") or "always").strip().lower()
+    if raw in {"0", "false", "no", "off", "disable", "disabled"}:
+        return "off"
+    if raw in {"auto", "smart", "adaptive"}:
+        return "smart"
+    return "always"
 
 
 def _should_parallel(ordered: list[DnsResolverTarget]) -> bool:
@@ -1124,25 +1207,39 @@ def _should_parallel(ordered: list[DnsResolverTarget]) -> bool:
         return False
     if len(ordered) < 2:
         return False
+    mode = _parallel_query_mode()
+    if mode == "off":
+        return False
+    if mode == "always":
+        return True
     best = _resolver_health(ordered[0])
-    if best.get("ok", 0.0) < 2:
+    if best.get("ok", 0.0) < 4:
         return True
     if best.get("fail", 0.0) > 0:
         return True
-    if best.get("ema_rtt", 0.45) > 0.85:
+    if best.get("ema_rtt", 0.45) > 0.65:
+        return True
+    if len(ordered) >= 3:
         return True
     return False
 
 
-def _query_txt(name: str, resolvers: list[DnsResolverTarget] | None = None) -> list[bytes]:
-    ordered = _ordered_resolvers(_public_fallback_resolvers(resolvers or load_dns_resolvers()))
+def _query_txt(
+    name: str,
+    resolvers: list[DnsResolverTarget] | None = None,
+    use_fallback_resolvers: bool = True,
+) -> list[bytes]:
+    base = resolvers or load_dns_resolvers()
+    targets = _public_fallback_resolvers(base) if use_fallback_resolvers else base
+    ordered = _ordered_resolvers(targets)
     if not ordered:
         ordered = [DnsResolverTarget(use_system=True)]
+    retry_plan = _query_retry_plan(len(ordered))
 
     if _should_parallel(ordered):
-        fanout = min(3, len(ordered))
-        return _query_txt_parallel(name, ordered[:fanout], ordered[fanout:])
-    return _query_txt_sequential(name, ordered)
+        fanout = min(2, len(ordered))
+        return _query_txt_parallel(name, ordered[:fanout], ordered[fanout:], retry_plan=retry_plan)
+    return _query_txt_sequential(name, ordered, retry_plan=retry_plan)
 
 
 def _effective_query_size() -> int:
@@ -1173,11 +1270,18 @@ def _query_meta(
     client_id: str,
     session: str,
     resolver_targets: list[DnsResolverTarget],
+    strict_resolvers: bool = False,
 ) -> dict[str, str]:
     last_exc: Exception | None = None
     for attempt in range(_meta_retry_count()):
         try:
-            meta_raw = _parse_txt(_query_txt(f"meta.{client_id}.{session}.{domain}", resolver_targets)[0])
+            meta_raw = _parse_txt(
+                _query_txt(
+                    f"meta.{client_id}.{session}.{domain}",
+                    resolver_targets,
+                    use_fallback_resolvers=not strict_resolvers,
+                )[0]
+            )
             return _ensure_ok(meta_raw, f"meta:{domain}")
         except Exception as exc:
             last_exc = exc
@@ -1387,19 +1491,30 @@ def _effective_password(password: str | None) -> str:
     return (get_setting("dns_password", "") or "").strip()
 
 
-def _get_session_for_domain(domain: str, password: str, resolvers: list[DnsResolverTarget]) -> tuple[str, str]:
+def _get_session_for_domain(
+    domain: str,
+    password: str,
+    resolvers: list[DnsResolverTarget],
+    strict_resolvers: bool = False,
+    bypass_cache: bool = False,
+) -> tuple[str, str]:
     domain_norm = domain.rstrip(".").lower()
     password = _effective_password(password)
     password_sig = hashlib.sha1(password.encode("utf-8")).hexdigest()
     cache_key = (domain_norm, password_sig)
     now = time.time()
-    with _SESSION_LOCK:
-        cached = _SESSION_CACHE.get(cache_key)
-        if cached and cached[2] > now + 10:
-            return cached[0], cached[1]
+    if not bypass_cache:
+        with _SESSION_LOCK:
+            cached = _SESSION_CACHE.get(cache_key)
+            if cached and cached[2] > now + 10:
+                return cached[0], cached[1]
 
     client_id = _dns_client_id()
-    auth_raw = _query_txt(f"auth.{client_id}.{password_sig}.{domain_norm}", resolvers)[0]
+    auth_raw = _query_txt(
+        f"auth.{client_id}.{password_sig}.{domain_norm}",
+        resolvers,
+        use_fallback_resolvers=not strict_resolvers,
+    )[0]
     auth_parts = _ensure_ok(auth_raw, f"dns_auth:{domain_norm}")
 
     session = re.sub(r"[^a-z0-9]+", "", (auth_parts.get("s", "public") or "public").lower())
@@ -1412,8 +1527,9 @@ def _get_session_for_domain(domain: str, password: str, resolvers: list[DnsResol
         ttl = 3600
     ttl = max(60, min(86400, ttl))
 
-    with _SESSION_LOCK:
-        _SESSION_CACHE[cache_key] = (client_id, session, now + ttl)
+    if not bypass_cache:
+        with _SESSION_LOCK:
+            _SESSION_CACHE[cache_key] = (client_id, session, now + ttl)
     return client_id, session
 
 
@@ -2098,7 +2214,13 @@ def sync_from_dns_domain(domain: str, password: str = "", progress: ProgressCall
         return result
 
 
-def probe_dns_domain(domain: str, password: str = "", resolvers: list[DnsResolverTarget] | None = None) -> dict:
+def probe_dns_domain(
+    domain: str,
+    password: str = "",
+    resolvers: list[DnsResolverTarget] | None = None,
+    strict_resolvers: bool = False,
+    bypass_session_cache: bool = False,
+) -> dict:
     setup_logging()
     domain = (domain or "").strip().rstrip(".").lower()
     if not domain:
@@ -2108,8 +2230,14 @@ def probe_dns_domain(domain: str, password: str = "", resolvers: list[DnsResolve
     resolver_keys = [("system" if r.use_system else f"{r.server}:{r.port}") for r in resolver_targets]
     started = time.time()
     try:
-        client_id, session = _get_session_for_domain(domain, password, resolver_targets)
-        parts = _query_meta(domain, client_id, session, resolver_targets)
+        client_id, session = _get_session_for_domain(
+            domain,
+            password,
+            resolver_targets,
+            strict_resolvers=strict_resolvers,
+            bypass_cache=bypass_session_cache,
+        )
+        parts = _query_meta(domain, client_id, session, resolver_targets, strict_resolvers=strict_resolvers)
         result = {
             "ok": True,
             "domain": domain,
@@ -2184,3 +2312,4 @@ def sync_from_dns_to_main_db(progress: ProgressCallback = None) -> dict:
     record_event("dns_sync", ok=domain_errors == 0, elapsed_ms=int((time.time() - started) * 1000), result=result)
     _emit_progress(progress, kind="sync_finish", mode="dns", ok=domain_errors == 0, result=result, elapsed_ms=int((time.time() - started) * 1000))
     return result
+

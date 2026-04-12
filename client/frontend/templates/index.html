@@ -30,7 +30,7 @@
       }
     })();
   </script>
-  <link rel="stylesheet" href="/static/style.css?v=20260331j" />
+  <link rel="stylesheet" href="/static/style.css?v=20260411f" />
 </head>
 <body>
   <div class="layout">
@@ -98,23 +98,24 @@
       {% endif %}
       {% for ch in channels %}
       {% set latest_id = latest_by_channel.get(ch.id, 0) %}
+      {% set display_username = (ch.display_username or ch.username or '') %}
       <a
         class="channel {% if selected == ch.source_url %}active{% endif %}"
         href="/?channel={{ ch.source_url }}"
         data-channel-key="{{ ch.source_url }}"
         data-latest-id="{{ latest_id }}"
-        data-search-text="{{ ((ch.title or ('@' ~ ch.username)) ~ ' ' ~ ch.source_url ~ ' @' ~ ch.username) | lower }}"
+        data-search-text="{{ ((ch.title or ('@' ~ display_username)) ~ ' ' ~ ch.source_url ~ ' @' ~ display_username) | lower }}"
       >
         {% if ch.avatar_b64 %}
-        <img class="avatar" src="data:{{ ch.avatar_mime or 'image/jpeg' }};base64,{{ ch.avatar_b64 }}" alt="{{ ch.title or ch.username }}" loading="lazy" />
+        <img class="avatar" src="data:{{ ch.avatar_mime or 'image/jpeg' }};base64,{{ ch.avatar_b64 }}" alt="{{ ch.title or display_username }}" loading="lazy" />
         {% elif ch.avatar_url %}
-        <img class="avatar" src="{{ ch.avatar_url }}" alt="{{ ch.title or ch.username }}" loading="lazy" referrerpolicy="no-referrer" />
+        <img class="avatar" src="{{ ch.avatar_url }}" alt="{{ ch.title or display_username }}" loading="lazy" referrerpolicy="no-referrer" />
         {% else %}
-        <div class="avatar avatar-fallback" aria-hidden="true">{{ ((ch.username or '?')[:2]) | upper }}</div>
+        <div class="avatar avatar-fallback" aria-hidden="true">{{ ((display_username or '?')[:2]) | upper }}</div>
         {% endif %}
         <div class="channel-main">
-          <div class="name">{{ ch.title or ('@' ~ ch.username) }}</div>
-          <div class="url">@{{ ch.username }}</div>
+          <div class="name">{{ ch.title or ('@' ~ display_username) }}</div>
+          <div class="url">@{{ display_username }}</div>
         </div>
         <div class="unread-badge" hidden>0</div>
       </a>
@@ -181,6 +182,14 @@
         <div class="messages" id="messages">
           {% include "_messages_panel.html" %}
         </div>
+        <button
+          type="button"
+          class="scroll-bottom-btn"
+          id="scrollToBottomBtn"
+          aria-label="Scroll to bottom"
+          title="Scroll to bottom"
+          hidden
+        >↓</button>
         <div class="chat-loading-overlay" id="channelLoadingOverlay" aria-live="polite" aria-busy="true">
           <div class="chat-loading-card" role="status">
             <span class="chat-loading-spinner" aria-hidden="true"></span>
@@ -401,6 +410,6 @@
     </div>
   </div>
 
-  <script type="module" src="/static/index.js?v=20260331h"></script>
+  <script type="module" src="/static/index.js?v=20260411f"></script>
 </body>
 </html>

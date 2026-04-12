@@ -5,9 +5,9 @@ on:
     paths:
       - "client/**/*.py"
       - "server/**/*.py"
-      - "client/alembic/**"
+      - "client/app/db/alembic/**"
       - "client/alembic.ini"
-      - "server/alembic/**"
+      - "server/app/db/alembic/**"
       - "server/alembic.ini"
       - "client/requirements.txt"
       - "server/requirements.txt"
@@ -17,9 +17,9 @@ on:
     paths:
       - "client/**/*.py"
       - "server/**/*.py"
-      - "client/alembic/**"
+      - "client/app/db/alembic/**"
       - "client/alembic.ini"
-      - "server/alembic/**"
+      - "server/app/db/alembic/**"
       - "server/alembic.ini"
       - "client/requirements.txt"
       - "server/requirements.txt"

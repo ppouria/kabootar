@@ -24,20 +24,48 @@ python3 build/assets/prepare_logo_assets.py
 npm --prefix frontend ci
 npm --prefix frontend run build
 
+VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1)"
+VERSION_NAME="${VERSION_NAME:-0.0.0}"
+SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+VERSION_TAG="v${SAFE_NAME}"
+
+ARCH_RAW="$(uname -m)"
+case "${ARCH_RAW}" in
+  x86_64|amd64) OUT_ARCH="amd64" ;;
+  aarch64|arm64) OUT_ARCH="arm64" ;;
+  *) OUT_ARCH="${ARCH_RAW}" ;;
+esac
+
 python3 -m PyInstaller \
   --noconfirm \
   --clean \
   --onefile \
   --windowed \
-  --name kabootar \
+  --name kabootar-gui \
   --add-data "../version.properties:." \
   --add-data "frontend/templates:frontend/templates" \
   --add-data "frontend/static:frontend/static" \
-  --add-data "alembic:alembic" \
+  --add-data "app/db/alembic:app/db/alembic" \
   desktop_client.py
 
-cp dist/kabootar dist/kabootar-linux-x64
-chmod +x dist/kabootar-linux-x64
+python3 -m PyInstaller \
+  --noconfirm \
+  --clean \
+  --onefile \
+  --name kabootar-web \
+  --add-data "../version.properties:." \
+  --add-data "frontend/templates:frontend/templates" \
+  --add-data "frontend/static:frontend/static" \
+  --add-data "app/db/alembic:app/db/alembic" \
+  web_client.py
+
+GUI_NAME="Kabootar-client-linux-${OUT_ARCH}-${VERSION_TAG}"
+WEB_NAME="Kabootar-client-linux-${OUT_ARCH}-web-${VERSION_TAG}"
+
+cp dist/kabootar-gui "dist/${GUI_NAME}"
+cp dist/kabootar-web "dist/${WEB_NAME}"
+chmod +x "dist/${GUI_NAME}" "dist/${WEB_NAME}"
 
 echo
-echo "Build finished: dist/kabootar-linux-x64"
+echo "Build finished: dist/${GUI_NAME}"
+echo "Build finished: dist/${WEB_NAME}"

@@ -1,11 +1,9 @@
-from sqlalchemy import Text
-from sqlalchemy.orm import Mapped, mapped_column
+"""Compatibility shim for older imports.
 
-from app.db import Base
+Prefer importing from ``app.db.models``.
+"""
 
+from app.db.models import AppSetting
 
-class AppSetting(Base):
-    __tablename__ = "app_settings"
+__all__ = ["AppSetting"]
 
-    key: Mapped[str] = mapped_column(Text, primary_key=True)
-    value: Mapped[str] = mapped_column(Text)

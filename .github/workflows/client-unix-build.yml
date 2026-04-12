@@ -28,22 +28,17 @@ jobs:
       matrix:
         include:
           - runner: ubuntu-latest
-            label: Linux x64
-            artifact_name: kabootar-linux-x64
-            artifact_path: client/dist/kabootar-linux-x64
-            release_name: kabootar-linux-x64
+            label: Linux amd64
             kind: linux
+            out_arch: amd64
           - runner: ubuntu-24.04-arm
             label: Linux arm64
-            artifact_name: kabootar-linux-arm64
-            artifact_path: client/dist/kabootar-linux-arm64
-            release_name: kabootar-linux-arm64
             kind: linux
+            out_arch: arm64
           - runner: macos-latest
             label: macOS
-            artifact_name: kabootar-macos
-            artifact_path: client/dist/kabootar-macos.zip
             kind: macos
+            out_arch: auto
 
     defaults:
       run:
@@ -53,6 +48,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Read Version
+        run: |
+          VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1)"
+          VERSION_NAME="${VERSION_NAME:-0.0.0}"
+          SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+          VERSION_TAG="v${SAFE_NAME}"
+          echo "VERSION_TAG=${VERSION_TAG}" >> "${GITHUB_ENV}"
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -93,7 +96,7 @@ jobs:
           npm ci
           npm run build
 
-      - name: Build Linux Binary
+      - name: Build Linux GUI + WEB Binaries
         if: matrix.kind == 'linux'
         run: |
           python -m PyInstaller \
@@ -101,41 +104,102 @@ jobs:
             --clean \
             --onefile \
             --windowed \
-            --name kabootar \
+            --name kabootar-gui \
             --add-data "../version.properties:." \
             --add-data "frontend/templates:frontend/templates" \
             --add-data "frontend/static:frontend/static" \
-            --add-data "alembic:alembic" \
+            --add-data "app/db/alembic:app/db/alembic" \
             desktop_client.py
-          cp dist/kabootar "dist/${{ matrix.release_name }}"
-          chmod +x "dist/${{ matrix.release_name }}"
 
-      - name: Build macOS Package
-        if: matrix.kind == 'macos'
-        run: |
           python -m PyInstaller \
             --noconfirm \
             --clean \
+            --onefile \
+            --name kabootar-web \
+            --add-data "../version.properties:." \
+            --add-data "frontend/templates:frontend/templates" \
+            --add-data "frontend/static:frontend/static" \
+            --add-data "app/db/alembic:app/db/alembic" \
+            web_client.py
+
+          GUI_OUT="Kabootar-client-linux-${{ matrix.out_arch }}-${VERSION_TAG}"
+          WEB_OUT="Kabootar-client-linux-${{ matrix.out_arch }}-web-${VERSION_TAG}"
+
+          cp dist/kabootar-gui "dist/${GUI_OUT}"
+          cp dist/kabootar-web "dist/${WEB_OUT}"
+          chmod +x "dist/${GUI_OUT}" "dist/${WEB_OUT}"
+
+          echo "GUI_OUT=${GUI_OUT}" >> "${GITHUB_ENV}"
+          echo "WEB_OUT=${WEB_OUT}" >> "${GITHUB_ENV}"
+
+      - name: Build macOS Darwin Binary
+        if: matrix.kind == 'macos'
+        run: |
+          ARCH_RAW="$(uname -m)"
+          case "${ARCH_RAW}" in
+            x86_64|amd64) OUT_ARCH="amd64" ;;
+            arm64|aarch64) OUT_ARCH="arm64" ;;
+            *) OUT_ARCH="${ARCH_RAW}" ;;
+          esac
+
+          python -m PyInstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
             --windowed \
-            --name kabootar \
+            --name kabootar-darwin \
             --icon build/macos/kabootar.icns \
             --add-data "../version.properties:." \
             --add-data "frontend/templates:frontend/templates" \
             --add-data "frontend/static:frontend/static" \
-            --add-data "alembic:alembic" \
+            --add-data "app/db/alembic:app/db/alembic" \
             desktop_client.py
-          rm -f dist/kabootar-macos.zip
-          ditto -c -k --sequesterRsrc --keepParent dist/kabootar.app dist/kabootar-macos.zip
 
-      - name: Upload Artifact
+          DARWIN_OUT="Kabootar-client-darwin-${OUT_ARCH}-${VERSION_TAG}"
+          cp dist/kabootar-darwin "dist/${DARWIN_OUT}"
+          chmod +x "dist/${DARWIN_OUT}"
+
+          echo "DARWIN_OUT=${DARWIN_OUT}" >> "${GITHUB_ENV}"
+
+      - name: Upload Linux GUI Artifact
+        if: matrix.kind == 'linux'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_path }}
+          name: ${{ env.GUI_OUT }}
+          path: client/dist/${{ env.GUI_OUT }}
           if-no-files-found: error
 
-      - name: Publish Release Asset
-        if: github.event_name == 'release'
+      - name: Upload Linux WEB Artifact
+        if: matrix.kind == 'linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.WEB_OUT }}
+          path: client/dist/${{ env.WEB_OUT }}
+          if-no-files-found: error
+
+      - name: Upload macOS Artifact
+        if: matrix.kind == 'macos'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.DARWIN_OUT }}
+          path: client/dist/${{ env.DARWIN_OUT }}
+          if-no-files-found: error
+
+      - name: Publish Linux GUI Release Asset
+        if: github.event_name == 'release' && matrix.kind == 'linux'
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact_path }}
+          files: client/dist/${{ env.GUI_OUT }}
+
+      - name: Publish Linux WEB Release Asset
+        if: github.event_name == 'release' && matrix.kind == 'linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client/dist/${{ env.WEB_OUT }}
+
+      - name: Publish macOS Release Asset
+        if: github.event_name == 'release' && matrix.kind == 'macos'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: client/dist/${{ env.DARWIN_OUT }}
+

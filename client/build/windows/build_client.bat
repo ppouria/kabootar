@@ -45,7 +45,7 @@ if errorlevel 1 exit /b 1
   --add-data "..\version.properties;." ^
   --add-data "frontend\templates;frontend\templates" ^
   --add-data "frontend\static;frontend\static" ^
-  --add-data "alembic;alembic" ^
+  --add-data "app\\db\\alembic;app\\db\\alembic" ^
   desktop_client.py
 if errorlevel 1 exit /b 1
 

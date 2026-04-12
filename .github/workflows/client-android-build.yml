@@ -38,6 +38,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Read Version
+        run: |
+          VERSION_NAME="$(sed -n 's/^version_name=//p' version.properties | head -n 1)"
+
+          VERSION_NAME="${VERSION_NAME:-0.0.0}"
+          SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+          VERSION_TAG="v${SAFE_NAME}"
+
+          echo "VERSION_TAG=${VERSION_TAG}" >> "${GITHUB_ENV}"
+          echo "ANDROID_ARTIFACT_NAME=Kabootar-client-android-apks-${VERSION_TAG}" >> "${GITHUB_ENV}"
+
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -99,19 +110,27 @@ jobs:
           test -n "${ARM64_SOURCE}" || { echo 'arm64-v8a APK not found' >&2; exit 1; }
           test -n "${X64_SOURCE}" || { echo 'x86_64 APK not found' >&2; exit 1; }
 
-          cp "${UNIVERSAL_SOURCE}" "${RELEASE_DIR}/kabootar-android-universal.apk"
-          cp "${ARM64_SOURCE}" "${RELEASE_DIR}/kabootar-android-arm64-v8a.apk"
-          cp "${X64_SOURCE}" "${RELEASE_DIR}/kabootar-android-x86_64.apk"
+          UNIVERSAL_TARGET="Kabootar-client-android-universal-${VERSION_TAG}.apk"
+          ARM64_TARGET="Kabootar-client-android-arm64-v8a-${VERSION_TAG}.apk"
+          X64_TARGET="Kabootar-client-android-x86_64-${VERSION_TAG}.apk"
+
+          cp "${UNIVERSAL_SOURCE}" "${RELEASE_DIR}/${UNIVERSAL_TARGET}"
+          cp "${ARM64_SOURCE}" "${RELEASE_DIR}/${ARM64_TARGET}"
+          cp "${X64_SOURCE}" "${RELEASE_DIR}/${X64_TARGET}"
+
+          echo "APK_UNIVERSAL=${UNIVERSAL_TARGET}" >> "${GITHUB_ENV}"
+          echo "APK_ARM64=${ARM64_TARGET}" >> "${GITHUB_ENV}"
+          echo "APK_X64=${X64_TARGET}" >> "${GITHUB_ENV}"
 
       - name: Upload Android APKs
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: kabootar-android-apks
+          name: ${{ env.ANDROID_ARTIFACT_NAME }}
           path: |
-            client/android/app/build/outputs/apk/release/kabootar-android-universal.apk
-            client/android/app/build/outputs/apk/release/kabootar-android-arm64-v8a.apk
-            client/android/app/build/outputs/apk/release/kabootar-android-x86_64.apk
+            client/android/app/build/outputs/apk/release/${{ env.APK_UNIVERSAL }}
+            client/android/app/build/outputs/apk/release/${{ env.APK_ARM64 }}
+            client/android/app/build/outputs/apk/release/${{ env.APK_X64 }}
           if-no-files-found: error
 
       - name: Publish Release Assets
@@ -120,6 +139,6 @@ jobs:
         with:
           overwrite_files: true
           files: |
-            client/android/app/build/outputs/apk/release/kabootar-android-universal.apk
-            client/android/app/build/outputs/apk/release/kabootar-android-arm64-v8a.apk
-            client/android/app/build/outputs/apk/release/kabootar-android-x86_64.apk
+            client/android/app/build/outputs/apk/release/${{ env.APK_UNIVERSAL }}
+            client/android/app/build/outputs/apk/release/${{ env.APK_ARM64 }}
+            client/android/app/build/outputs/apk/release/${{ env.APK_X64 }}
