@@ -6,8 +6,8 @@ from functools import lru_cache
 from pathlib import Path
 
 _DEFAULT_APP_NAME = "Kabootar"
-_DEFAULT_VERSION_NAME = "0.7.0"
-_DEFAULT_VERSION_CODE = 9
+_DEFAULT_VERSION_NAME = "0.7.2"
+_DEFAULT_VERSION_CODE = 11
 _DEFAULT_RELEASE_CHANNEL = "stable"
 
 

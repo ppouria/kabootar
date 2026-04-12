@@ -26,6 +26,7 @@ type ChannelStatePayload = {
   ok: boolean;
   selected: string;
   latest_id: number;
+  latest_by_source?: Record<string, number>;
   message_count: number;
   search_disabled: boolean;
   header_html: string;
@@ -444,6 +445,31 @@ class MirrorApp {
     setTimeout(() => {
       autoPin = false;
     }, 900);
+  }
+
+  private reorderSidebarChannelsByLatest(): void {
+    const sidebar = document.getElementById('sidebar') as HTMLElement | null;
+    if (!sidebar) return;
+    const rows = [...sidebar.querySelectorAll<HTMLElement>('.channel')];
+    if (!rows.length) return;
+
+    rows.sort((a, b) => {
+      const latestA = Math.max(0, Number(a.dataset.latestId || 0) || 0);
+      const latestB = Math.max(0, Number(b.dataset.latestId || 0) || 0);
+      if (latestA !== latestB) return latestB - latestA;
+
+      const activeA = a.classList.contains('active') ? 1 : 0;
+      const activeB = b.classList.contains('active') ? 1 : 0;
+      if (activeA !== activeB) return activeB - activeA;
+
+      const keyA = String(a.dataset.channelKey || '').toLowerCase();
+      const keyB = String(b.dataset.channelKey || '').toLowerCase();
+      return keyA.localeCompare(keyB);
+    });
+
+    for (const row of rows) {
+      sidebar.appendChild(row);
+    }
   }
 
   private setupScrollToBottomButton(): void {
@@ -1492,10 +1518,29 @@ class MirrorApp {
     wrap.innerHTML = payload.messages_html || '';
     if (searchToggle) searchToggle.disabled = !!payload.search_disabled;
 
-    const activeRow = [...document.querySelectorAll<HTMLElement>('.channel')].find((el) => el.dataset.channelKey === this.selected);
-    if (activeRow) {
-      activeRow.dataset.latestId = String(Math.max(0, Number(payload.latest_id || 0) || 0));
+    const latestBySourceRaw = payload.latest_by_source && typeof payload.latest_by_source === 'object'
+      ? payload.latest_by_source
+      : {};
+    const latestBySource = latestBySourceRaw as Record<string, number>;
+    const rows = [...document.querySelectorAll<HTMLElement>('.channel')];
+    const rowByKey = new Map<string, HTMLElement>();
+    for (const row of rows) {
+      const key = String(row.dataset.channelKey || '').trim();
+      if (!key) continue;
+      rowByKey.set(key, row);
     }
+    for (const [key, rawLatest] of Object.entries(latestBySource)) {
+      const row = rowByKey.get(key);
+      if (!row) continue;
+      row.dataset.latestId = String(Math.max(0, Number(rawLatest || 0) || 0));
+    }
+    if (this.selected) {
+      const activeRow = rowByKey.get(this.selected);
+      if (activeRow) {
+        activeRow.dataset.latestId = String(Math.max(0, Number(payload.latest_id || 0) || 0));
+      }
+    }
+    this.reorderSidebarChannelsByLatest();
 
     const readMap = this.loadReadMap();
     this.applyI18n(headerPrimary);

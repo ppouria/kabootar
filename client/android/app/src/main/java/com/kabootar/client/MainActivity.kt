@@ -1,12 +1,17 @@
 package com.kabootar.client
 
+import android.app.Activity
 import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
 import android.webkit.JavascriptInterface
+import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceError
@@ -27,6 +32,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val BOOTSTRAP_URL = "file:///android_asset/bootstrap.html"
         private const val TAG = "KabootarAndroid"
+        private const val FILE_CHOOSER_REQUEST_CODE = 4107
     }
 
     private lateinit var rootView: FrameLayout
@@ -44,6 +50,7 @@ class MainActivity : AppCompatActivity() {
     private var backendUrl = "http://127.0.0.1:${BuildConfig.LOCAL_BACKEND_PORT}"
     @Volatile
     private var backendStarting = false
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -68,7 +75,72 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.addJavascriptInterface(AndroidBridge(), "KabootarAndroid")
-        webView.webChromeClient = WebChromeClient()
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?,
+            ): Boolean {
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = null
+
+                if (filePathCallback == null) return false
+
+                fileChooserCallback = filePathCallback
+                return try {
+                    val intent = (fileChooserParams?.createIntent() ?: Intent(Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                    }).apply {
+                        val acceptedMimeTypes = fileChooserParams?.acceptTypes
+                            ?.mapNotNull { it?.trim() }
+                            ?.filter { it.isNotEmpty() }
+                            ?.mapNotNull {
+                                val token = it.lowercase()
+                                when {
+                                    token == ".txt" -> "text/plain"
+                                    token.contains("/") -> token
+                                    else -> null
+                                }
+                            }
+                            ?: emptyList()
+                        if (acceptedMimeTypes.isNotEmpty()) {
+                            type = acceptedMimeTypes.first()
+                            if (acceptedMimeTypes.size > 1) {
+                                putExtra(Intent.EXTRA_MIME_TYPES, acceptedMimeTypes.toTypedArray())
+                            }
+                        }
+                        putExtra(
+                            Intent.EXTRA_ALLOW_MULTIPLE,
+                            fileChooserParams?.mode == FileChooserParams.MODE_OPEN_MULTIPLE,
+                        )
+                    }
+                    startActivityForResult(
+                        Intent.createChooser(intent, "Select file"),
+                        FILE_CHOOSER_REQUEST_CODE,
+                    )
+                    true
+                } catch (exc: ActivityNotFoundException) {
+                    Log.w(TAG, "File chooser activity not found", exc)
+                    fileChooserCallback = null
+                    Toast.makeText(
+                        this@MainActivity,
+                        "No file picker is available on this device.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    false
+                } catch (exc: Throwable) {
+                    Log.w(TAG, "File chooser failed", exc)
+                    fileChooserCallback = null
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Failed to open file picker.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                    false
+                }
+            }
+        }
         webView.webViewClient = object : WebViewClient() {
             private fun handleMainFrameError(failingUrl: String?) {
                 if (!failingUrl.isNullOrBlank() && failingUrl.startsWith(BOOTSTRAP_URL)) {
@@ -200,6 +272,7 @@ class MainActivity : AppCompatActivity() {
                     BuildConfig.APP_VERSION_NAME,
                     BuildConfig.APP_VERSION_CODE,
                     BuildConfig.RELEASE_CHANNEL,
+                    BuildConfig.DEBUG,
                 ).toString()
 
                 backendUrl = url
@@ -276,8 +349,32 @@ class MainActivity : AppCompatActivity() {
         super.onBackPressed()
     }
 
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != FILE_CHOOSER_REQUEST_CODE) return
+        val callback = fileChooserCallback
+        fileChooserCallback = null
+        if (callback == null) return
+
+        if (resultCode != Activity.RESULT_OK) {
+            callback.onReceiveValue(null)
+            return
+        }
+
+        val parsed = WebChromeClient.FileChooserParams.parseResult(resultCode, data)
+        if (parsed != null && parsed.isNotEmpty()) {
+            callback.onReceiveValue(parsed)
+            return
+        }
+        val fallback = data?.data?.let { arrayOf(it) }
+        callback.onReceiveValue(fallback)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
+        fileChooserCallback?.onReceiveValue(null)
+        fileChooserCallback = null
         backendExecutor.shutdownNow()
     }
 }

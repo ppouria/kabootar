@@ -55,6 +55,19 @@ def _wait_ready(url: str, timeout_seconds: float = 20.0) -> None:
     raise RuntimeError(f"embedded_backend_not_ready:{last_exc}")
 
 
+def _purge_runtime_logs(runtime_data_root: Path) -> None:
+    log_dir = runtime_data_root / "logs"
+    if not log_dir.exists():
+        return
+    for path in log_dir.glob("client.log*"):
+        try:
+            if path.is_file():
+                path.unlink()
+        except Exception:
+            # Ignore startup cleanup failures on restricted filesystems.
+            pass
+
+
 def _configure_environment(
     files_dir: str,
     cache_dir: str,
@@ -63,7 +76,8 @@ def _configure_environment(
     version_name: str,
     version_code: int,
     release_channel: str,
-) -> tuple[Path, str]:
+    debug_enabled: bool = False,
+) -> tuple[Path, Path, str]:
     files_root = Path(files_dir).expanduser().resolve()
     cache_root = Path(cache_dir).expanduser().resolve()
     runtime_root = files_root / "kabootar"
@@ -88,9 +102,11 @@ def _configure_environment(
     os.environ["KABOOTAR_VERSION_NAME"] = version_name
     os.environ["KABOOTAR_VERSION_CODE"] = str(version_code)
     os.environ["KABOOTAR_RELEASE_CHANNEL"] = release_channel
+    os.environ["KABOOTAR_DEBUG_ENABLED"] = "1" if bool(debug_enabled) else "0"
+    os.environ["KABOOTAR_FILE_LOG_ENABLED"] = "1" if bool(debug_enabled) else "0"
 
     url = f"http://127.0.0.1:{port}"
-    return runtime_root, url
+    return runtime_root, data_root, url
 
 
 def start_backend(
@@ -98,14 +114,15 @@ def start_backend(
     cache_dir: str,
     port: int = 18765,
     app_name: str = "Kabootar",
-    version_name: str = "0.7.0",
-    version_code: int = 8,
+    version_name: str = "0.7.2",
+    version_code: int = 11,
     release_channel: str = "stable",
+    debug_enabled: bool = False,
 ) -> str:
     global _SERVER, _THREAD, _URL
 
     with _LOCK:
-        runtime_root, url = _configure_environment(
+        runtime_root, data_root, url = _configure_environment(
             files_dir=files_dir,
             cache_dir=cache_dir,
             port=int(port),
@@ -113,12 +130,16 @@ def start_backend(
             version_name=version_name,
             version_code=int(version_code),
             release_channel=release_channel,
+            debug_enabled=bool(debug_enabled),
         )
         os.chdir(runtime_root)
 
         if _THREAD is not None and _THREAD.is_alive() and _URL:
             _wait_ready(_URL, timeout_seconds=6.0)
             return _URL
+
+        # Always start from a clean log file on Android fresh backend start.
+        _purge_runtime_logs(data_root)
 
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:

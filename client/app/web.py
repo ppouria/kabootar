@@ -58,6 +58,7 @@ _RESOLVER_SCAN_JOBS_LOCK = threading.Lock()
 _RESOLVER_SCAN_JOBS: dict[str, dict] = {}
 _RESOLVER_SCAN_CONTROLS: dict[str, ResolverScanController] = {}
 _RESOLVER_SCAN_JOB_TTL_SECONDS = 1800
+_RESOLVER_SCAN_LAST_JOB_KEY = "dns_resolver_last_scan_job"
 _APP_AUTH_COOKIE = "kabootar_app_auth"
 
 
@@ -141,6 +142,9 @@ def _new_resolver_scan_job(payload: dict[str, object]) -> dict[str, object]:
         "e2e_total": 0,
         "e2e_tested": 0,
         "e2e_passed": 0,
+        "e2e_current_resolver": "",
+        "e2e_current_ok": None,
+        "e2e_passed_resolvers": [],
         "transparent_proxy_detected": None,
         "selected_resolver": "",
         "auto_applied": False,
@@ -160,6 +164,59 @@ def _parse_bool(value: object, default: bool = False) -> bool:
     if raw in {"", "none"}:
         return default
     return raw not in {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _persist_resolver_scan_snapshot(snapshot: dict[str, object]) -> None:
+    if not isinstance(snapshot, dict):
+        return
+    data = dict(snapshot)
+    data["snapshot_saved_at"] = int(time.time())
+    try:
+        set_setting(_RESOLVER_SCAN_LAST_JOB_KEY, json.dumps(data, ensure_ascii=False, separators=(",", ":")))
+    except Exception as exc:
+        logger.warning("resolver scan snapshot persist failed: %s", exc)
+
+
+def _load_persisted_resolver_scan_snapshot() -> dict[str, object] | None:
+    raw = (get_setting(_RESOLVER_SCAN_LAST_JOB_KEY, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _extract_passed_e2e_resolvers(result: object) -> list[str]:
+    if not isinstance(result, dict):
+        return []
+    mode = str(result.get("mode") or "").strip().lower()
+    rows: list[object] = []
+    if mode == "e2e":
+        rows_raw = result.get("results")
+        if isinstance(rows_raw, list):
+            rows = rows_raw
+    else:
+        e2e = result.get("e2e")
+        if isinstance(e2e, dict):
+            rows_raw = e2e.get("results")
+            if isinstance(rows_raw, list):
+                rows = rows_raw
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("ok")):
+            continue
+        resolver = str(item.get("resolver") or "").strip()
+        if not resolver or resolver in seen:
+            continue
+        seen.add(resolver)
+        out.append(resolver)
+    return out
 
 
 def _resolver_scan_job_public(job: dict[str, object]) -> dict[str, object]:
@@ -188,6 +245,9 @@ def _resolver_scan_job_public(job: dict[str, object]) -> dict[str, object]:
         "e2e_total": int(job.get("e2e_total", 0) or 0),
         "e2e_tested": int(job.get("e2e_tested", 0) or 0),
         "e2e_passed": int(job.get("e2e_passed", 0) or 0),
+        "e2e_current_resolver": str(job.get("e2e_current_resolver") or ""),
+        "e2e_current_ok": job.get("e2e_current_ok"),
+        "e2e_passed_resolvers": list(job.get("e2e_passed_resolvers") or []),
         "transparent_proxy_detected": job.get("transparent_proxy_detected"),
         "selected_resolver": job.get("selected_resolver", ""),
         "auto_applied": bool(job.get("auto_applied")),
@@ -248,19 +308,52 @@ def _apply_resolver_scan_event_locked(job: dict[str, object], event: dict[str, o
         job["control_state"] = "running"
         job["message"] = "Running E2E checks"
         job["e2e_total"] = total
+        job["e2e_tested"] = 0
+        job["e2e_passed"] = 0
+        job["e2e_current_resolver"] = ""
+        job["e2e_current_ok"] = None
+        job["e2e_passed_resolvers"] = []
         if total == 0:
             job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 95.0)
+    elif kind == "e2e_testing":
+        resolver = str(event.get("resolver") or "").strip()
+        if resolver:
+            job["phase"] = "e2e"
+            job["status"] = "running"
+            job["control_state"] = "running"
+            job["e2e_current_resolver"] = resolver
+            job["e2e_current_ok"] = None
     elif kind == "e2e_progress":
         if str(job.get("status") or "") == "paused":
             return
         tested = max(0, int(event.get("tested", 0) or 0))
         total = max(0, int(event.get("total", 0) or 0))
         passed = max(0, int(event.get("passed", 0) or 0))
+        resolver = str(event.get("resolver") or "").strip()
+        ok_value: bool | None = None
+        if "ok" in event:
+            ok_value = bool(event.get("ok"))
         job["phase"] = "e2e"
         job["message"] = f"E2E... {tested}/{total} (passed: {passed})"
         job["e2e_total"] = max(int(job.get("e2e_total", 0) or 0), total)
         job["e2e_tested"] = max(int(job.get("e2e_tested", 0) or 0), tested)
         job["e2e_passed"] = max(int(job.get("e2e_passed", 0) or 0), passed)
+        if resolver:
+            job["e2e_current_resolver"] = resolver
+        if ok_value is not None:
+            job["e2e_current_ok"] = ok_value
+            if resolver and ok_value:
+                passed_resolvers: list[str] = []
+                seen: set[str] = set()
+                for raw in list(job.get("e2e_passed_resolvers") or []):
+                    item = str(raw or "").strip()
+                    if not item or item in seen:
+                        continue
+                    seen.add(item)
+                    passed_resolvers.append(item)
+                if resolver not in seen:
+                    passed_resolvers.append(resolver)
+                job["e2e_passed_resolvers"] = passed_resolvers
         if total > 0:
             ratio = min(1.0, float(tested) / float(total))
             job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), round(70.0 + (ratio * 30.0), 1))
@@ -281,6 +374,8 @@ def _apply_resolver_scan_event_locked(job: dict[str, object], event: dict[str, o
         job["stopped"] = stopped
         job["control_state"] = "stopped" if stopped else "completed"
         job["result"] = result
+        job["e2e_current_resolver"] = ""
+        job["e2e_current_ok"] = None
         job["selected_resolver"] = str(result.get("selected_resolver") or "")
         job["auto_applied"] = bool(result.get("auto_applied"))
         job["applied_resolvers"] = list(result.get("applied_resolvers") or [])
@@ -298,6 +393,19 @@ def _apply_resolver_scan_event_locked(job: dict[str, object], event: dict[str, o
             job["e2e_total"] = max(int(job.get("e2e_total", 0) or 0), int(e2e.get("tested", 0) or 0))
             job["e2e_tested"] = max(int(job.get("e2e_tested", 0) or 0), int(e2e.get("tested", 0) or 0))
             job["e2e_passed"] = max(int(job.get("e2e_passed", 0) or 0), int(e2e.get("passed", 0) or 0))
+        final_passed = _extract_passed_e2e_resolvers(result)
+        if final_passed:
+            job["e2e_passed_resolvers"] = final_passed
+        else:
+            dedup: list[str] = []
+            seen: set[str] = set()
+            for raw in list(job.get("e2e_passed_resolvers") or []):
+                resolver = str(raw or "").strip()
+                if not resolver or resolver in seen:
+                    continue
+                seen.add(resolver)
+                dedup.append(resolver)
+            job["e2e_passed_resolvers"] = dedup
 
 
 def _run_resolver_scan_job(job_id: str, options: dict[str, object]) -> None:
@@ -329,12 +437,17 @@ def _run_resolver_scan_job(job_id: str, options: dict[str, object]) -> None:
             control=control,
             progress=_progress,
         )
+        snapshot_to_persist: dict[str, object] | None = None
         with _RESOLVER_SCAN_JOBS_LOCK:
             job = _RESOLVER_SCAN_JOBS.get(job_id)
             if not job:
                 return
             _apply_resolver_scan_event_locked(job, {"kind": "scan_done", "result": result})
+            snapshot_to_persist = _resolver_scan_job_public(job)
+        if snapshot_to_persist:
+            _persist_resolver_scan_snapshot(snapshot_to_persist)
     except Exception as exc:
+        snapshot_to_persist: dict[str, object] | None = None
         with _RESOLVER_SCAN_JOBS_LOCK:
             job = _RESOLVER_SCAN_JOBS.get(job_id)
             if not job:
@@ -353,6 +466,9 @@ def _run_resolver_scan_job(job_id: str, options: dict[str, object]) -> None:
             job["finished_at"] = time.time()
             job["error"] = str(exc)
             job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 1.0)
+            snapshot_to_persist = _resolver_scan_job_public(job)
+        if snapshot_to_persist:
+            _persist_resolver_scan_snapshot(snapshot_to_persist)
     finally:
         with _RESOLVER_SCAN_JOBS_LOCK:
             _RESOLVER_SCAN_CONTROLS.pop(job_id, None)
@@ -379,12 +495,17 @@ def _run_resolver_e2e_job(job_id: str, options: dict[str, object]) -> None:
             control=control,
             progress=_progress,
         )
+        snapshot_to_persist: dict[str, object] | None = None
         with _RESOLVER_SCAN_JOBS_LOCK:
             job = _RESOLVER_SCAN_JOBS.get(job_id)
             if not job:
                 return
             _apply_resolver_scan_event_locked(job, {"kind": "scan_done", "result": result})
+            snapshot_to_persist = _resolver_scan_job_public(job)
+        if snapshot_to_persist:
+            _persist_resolver_scan_snapshot(snapshot_to_persist)
     except Exception as exc:
+        snapshot_to_persist: dict[str, object] | None = None
         with _RESOLVER_SCAN_JOBS_LOCK:
             job = _RESOLVER_SCAN_JOBS.get(job_id)
             if not job:
@@ -403,6 +524,9 @@ def _run_resolver_e2e_job(job_id: str, options: dict[str, object]) -> None:
             job["finished_at"] = time.time()
             job["error"] = str(exc)
             job["progress_percent"] = max(float(job.get("progress_percent", 0.0) or 0.0), 1.0)
+            snapshot_to_persist = _resolver_scan_job_public(job)
+        if snapshot_to_persist:
+            _persist_resolver_scan_snapshot(snapshot_to_persist)
     finally:
         with _RESOLVER_SCAN_JOBS_LOCK:
             _RESOLVER_SCAN_CONTROLS.pop(job_id, None)
@@ -1197,20 +1321,29 @@ def _load_index_state(selected: str | None, prefer_picker: bool, app_settings: d
         else:
             channels = db.scalars(select(Channel).order_by(Channel.username.asc())).all()
 
+        latest_rows = db.execute(
+            select(Message.channel_id, func.max(Message.message_id)).group_by(Message.channel_id)
+        ).all()
+        latest_by_channel = {row[0]: (row[1] or 0) for row in latest_rows}
+        channels = sorted(
+            channels,
+            key=lambda c: (
+                -int(latest_by_channel.get(c.id, 0) or 0),
+                configured_order.get(c.source_url, 10_000),
+                (c.username or "").lower(),
+            ),
+        )
+        latest_by_source = {
+            c.source_url: int(latest_by_channel.get(c.id, 0) or 0)
+            for c in channels
+        }
+
         selected_url = selected
         if not selected_url and channels and not prefer_picker:
             selected_url = channels[0].source_url
         elif selected_url and configured_channels and selected_url not in configured_set:
             selected_url = None if prefer_picker else (channels[0].source_url if channels else None)
-
-        selected_channel = None
-        if selected_url:
-            selected_channel = db.scalar(select(Channel).where(Channel.source_url == selected_url))
-
-        latest_rows = db.execute(
-            select(Message.channel_id, func.max(Message.message_id)).group_by(Message.channel_id)
-        ).all()
-        latest_by_channel = {row[0]: (row[1] or 0) for row in latest_rows}
+        selected_channel = next((c for c in channels if c.source_url == selected_url), None)
 
         messages: list[Message] = []
         if selected_channel:
@@ -1229,6 +1362,7 @@ def _load_index_state(selected: str | None, prefer_picker: bool, app_settings: d
         "selected_channel": selected_channel,
         "messages": messages,
         "latest_by_channel": latest_by_channel,
+        "latest_by_source": latest_by_source,
         "source_mode": source_mode,
         "dns_domains_count": len(dns_domain_lines),
     }
@@ -2004,18 +2138,32 @@ def create_app() -> Flask:
         if not _settings_unlocked():
             return _settings_guard_failed()
         job_id = (request.args.get("id") or "").strip()
+        payload_job: dict[str, object] | None = None
         with _RESOLVER_SCAN_JOBS_LOCK:
             _cleanup_resolver_scan_jobs_locked()
             job = _RESOLVER_SCAN_JOBS.get(job_id) if job_id else _get_active_resolver_scan_job_locked()
-            if not job:
-                if job_id:
-                    return jsonify({"ok": False, "error": "not_found"}), 404
-                # fallback to most recent finished job
-                if _RESOLVER_SCAN_JOBS:
-                    latest = max(_RESOLVER_SCAN_JOBS.values(), key=lambda x: float(x.get("started_at", 0) or 0))
-                    return jsonify({"ok": True, "job": _resolver_scan_job_public(latest)})
-                return jsonify({"ok": False, "error": "not_found"}), 404
-            return jsonify({"ok": True, "job": _resolver_scan_job_public(job)})
+            if job:
+                payload_job = _resolver_scan_job_public(job)
+            elif not job_id and _RESOLVER_SCAN_JOBS:
+                latest = max(_RESOLVER_SCAN_JOBS.values(), key=lambda x: float(x.get("started_at", 0) or 0))
+                payload_job = _resolver_scan_job_public(latest)
+        if payload_job:
+            return jsonify({"ok": True, "job": payload_job})
+        if job_id:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        persisted = _load_persisted_resolver_scan_snapshot()
+        if persisted:
+            return jsonify({"ok": True, "job": persisted, "persisted": True})
+        return jsonify({"ok": False, "error": "not_found"}), 404
+
+    @app.get("/dns/resolvers/scan/latest")
+    def dns_resolvers_scan_latest():
+        if not _settings_unlocked():
+            return _settings_guard_failed()
+        persisted = _load_persisted_resolver_scan_snapshot()
+        if not persisted:
+            return jsonify({"ok": False, "error": "not_found"}), 404
+        return jsonify({"ok": True, "job": persisted, "persisted": True})
 
     @app.post('/sync-now')
     def sync_now():
@@ -2060,6 +2208,7 @@ def create_app() -> Flask:
         selected_channel = state["selected_channel"]
         messages = state["messages"]
         latest_by_channel = state["latest_by_channel"]
+        latest_by_source = state.get("latest_by_source") if isinstance(state.get("latest_by_source"), dict) else {}
         latest_id = 0
         if selected_channel:
             latest_id = int(latest_by_channel.get(selected_channel.id, 0) or 0)
@@ -2068,6 +2217,7 @@ def create_app() -> Flask:
                 "ok": True,
                 "selected": state["selected"] or "",
                 "latest_id": latest_id,
+                "latest_by_source": latest_by_source,
                 "message_count": len(messages),
                 "search_disabled": not selected_channel or not messages,
                 "header_html": render_template(

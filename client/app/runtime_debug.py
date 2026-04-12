@@ -19,6 +19,27 @@ _EVENTS: deque[dict[str, object]] = deque(maxlen=300)
 _STARTED_AT = int(time.time())
 
 
+def _is_true(value: str, default: bool = False) -> bool:
+    raw = str(value or "").strip().lower()
+    if raw in {"", "none"}:
+        return default
+    return raw not in {"0", "false", "no", "off", "disable", "disabled"}
+
+
+def _file_logging_enabled() -> bool:
+    explicit = (os.getenv("KABOOTAR_FILE_LOG_ENABLED", "") or "").strip()
+    if explicit:
+        return _is_true(explicit, default=False)
+
+    platform = (os.getenv("KABOOTAR_PLATFORM", "") or "").strip().lower()
+    if platform == "android":
+        debug_enabled = (os.getenv("KABOOTAR_DEBUG_ENABLED", "") or "").strip()
+        if debug_enabled:
+            return _is_true(debug_enabled, default=False)
+        return False
+    return True
+
+
 def resolve_database_path() -> Path:
     raw = (os.getenv("DATABASE_URL", "") or "").strip()
     if raw.startswith("sqlite:///"):
@@ -48,7 +69,6 @@ def setup_logging() -> Path:
         if _SETUP_DONE:
             return log_path
 
-        log_path.parent.mkdir(parents=True, exist_ok=True)
         root = logging.getLogger()
         root.setLevel(logging.INFO)
 
@@ -56,6 +76,24 @@ def setup_logging() -> Path:
             "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S",
         )
+
+        file_logging_enabled = _file_logging_enabled()
+        if not file_logging_enabled:
+            for handler in list(root.handlers):
+                if isinstance(handler, RotatingFileHandler):
+                    root.removeHandler(handler)
+                    try:
+                        handler.close()
+                    except Exception:
+                        pass
+            _SETUP_DONE = True
+            logging.getLogger("kabootar.runtime").info(
+                "runtime logging ready (file logging disabled) platform=%s",
+                (os.getenv("KABOOTAR_PLATFORM", "") or "").strip().lower(),
+            )
+            return log_path
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
 
         file_handler_exists = False
         for handler in root.handlers:

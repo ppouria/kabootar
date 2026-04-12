@@ -37,6 +37,8 @@ class SettingsView {
   private resolverResumeBtn = document.getElementById('resolverResumeBtn') as HTMLButtonElement | null;
   private resolverStopBtn = document.getElementById('resolverStopBtn') as HTMLButtonElement | null;
   private resolverRunE2eBtn = document.getElementById('resolverRunE2eBtn') as HTMLButtonElement | null;
+  private resolverLoadLastBtn = document.getElementById('resolverLoadLastBtn') as HTMLButtonElement | null;
+  private resolverSetPassedBtn = document.getElementById('resolverSetPassedBtn') as HTMLButtonElement | null;
   private resolverSaveBtn = document.getElementById('resolverSaveBtn') as HTMLButtonElement | null;
   private resolverSortSelect = document.getElementById('resolverSort') as HTMLSelectElement | null;
   private resolverScanOnlyCheckbox = document.getElementById('resolverScanOnly') as HTMLInputElement | null;
@@ -239,6 +241,50 @@ class SettingsView {
     return out;
   }
 
+  private passedResolversFromResult(result: Record<string, unknown> | null): string[] {
+    if (!result) return [];
+    const mode = String(result.mode || '').trim().toLowerCase();
+    let rows: Array<Record<string, unknown>> = [];
+    if (mode === 'e2e') {
+      rows = Array.isArray(result.results) ? (result.results as Array<Record<string, unknown>>) : [];
+    } else {
+      const e2e = (result.e2e && typeof result.e2e === 'object') ? (result.e2e as Record<string, unknown>) : null;
+      rows = e2e && Array.isArray(e2e.results) ? (e2e.results as Array<Record<string, unknown>>) : [];
+    }
+    const out: string[] = [];
+    const seen = new Set<string>();
+    for (const item of rows) {
+      if (!item || !item.ok) continue;
+      const resolver = String(item.resolver || '').trim();
+      if (!resolver || seen.has(resolver)) continue;
+      seen.add(resolver);
+      out.push(resolver);
+    }
+    return out;
+  }
+
+  private e2ePassedResolversFromJob(job: Record<string, unknown> | null): string[] {
+    if (!job) return [];
+    const out: string[] = [];
+    const seen = new Set<string>();
+    const addToken = (token: unknown): void => {
+      const parsed = this.parseResolverToken(String(token || '').trim());
+      if (!parsed) return;
+      const canonical = this.canonicalResolver(parsed.host, parsed.port);
+      if (!canonical || seen.has(canonical)) return;
+      seen.add(canonical);
+      out.push(canonical);
+    };
+
+    if (Array.isArray(job.e2e_passed_resolvers)) {
+      for (const token of job.e2e_passed_resolvers as Array<unknown>) addToken(token);
+    }
+
+    const result = (job.result && typeof job.result === 'object') ? (job.result as Record<string, unknown>) : null;
+    for (const token of this.passedResolversFromResult(result)) addToken(token);
+    return out;
+  }
+
   private syncResolverScanOptionState(): void {
     if (!this.resolverScanAutoApplyCheckbox) return;
     const scanOnly = !!this.resolverScanOnlyCheckbox?.checked;
@@ -259,10 +305,18 @@ class SettingsView {
     if (this.resolverPauseBtn) this.resolverPauseBtn.disabled = !active || paused;
     if (this.resolverResumeBtn) this.resolverResumeBtn.disabled = !active || !paused;
     if (this.resolverStopBtn) this.resolverStopBtn.disabled = !active;
+    if (this.resolverLoadLastBtn) this.resolverLoadLastBtn.disabled = active;
 
     const hasScanCandidates = this.scanCompatibleResolvers(this.resolverScanLastScanResult).length > 0;
     if (this.resolverRunE2eBtn) this.resolverRunE2eBtn.disabled = active || !hasScanCandidates;
     if (this.resolverSaveBtn) this.resolverSaveBtn.disabled = !this.resolverScanLastResult;
+    const hasPassed = this.e2ePassedResolversFromJob(this.resolverScanLastJob).length > 0;
+    const finished = !active && ['done', 'stopped'].includes(status);
+    const canSetPassed = finished && hasPassed;
+    if (this.resolverSetPassedBtn) {
+      this.resolverSetPassedBtn.hidden = !canSetPassed;
+      this.resolverSetPassedBtn.disabled = !canSetPassed;
+    }
   }
 
   private renderResolverTop(result: Record<string, unknown> | null): void {
@@ -378,6 +432,35 @@ class SettingsView {
     this.setResolverScanInputValues(clean);
   }
 
+  private setPassedResolversToUi(): void {
+    const passed = this.e2ePassedResolversFromJob(this.resolverScanLastJob);
+    if (!passed.length) {
+      this.showFlash(this.t('settings.resolver_scan_set_passed_empty', 'No passed resolver available yet.'), 'error');
+      return;
+    }
+    const existing = this.configuredResolversFromUi();
+    const merged: string[] = [];
+    const seen = new Set<string>();
+    for (const token of [...passed, ...existing]) {
+      const parsed = this.parseResolverToken(token);
+      if (!parsed) continue;
+      const canonical = this.canonicalResolver(parsed.host, parsed.port);
+      if (!canonical || seen.has(canonical)) continue;
+      seen.add(canonical);
+      merged.push(canonical);
+    }
+    if (!merged.length) {
+      this.showFlash(this.t('settings.resolver_scan_set_passed_empty', 'No passed resolver available yet.'), 'error');
+      return;
+    }
+    this.applyAutoResolversToUi(merged);
+    this.showFlash(
+      `${this.t('settings.resolver_scan_set_passed_done', 'Passed resolvers added to resolver list.')}: ${passed.length}`,
+      'success',
+    );
+    this.syncResolverScanActionState();
+  }
+
   private renderResolverScanJob(job: Record<string, unknown>): void {
     const status = String(job.status || '');
     const controlState = String(job.control_state || '');
@@ -408,6 +491,9 @@ class SettingsView {
     const compatible = resultMode === 'e2e' ? [] : this.sortedCompatible(result);
     const e2eRows = Array.isArray(result.results) ? (result.results as Array<Record<string, unknown>>) : [];
     const stopped = !!job.stopped || !!result.stopped || status === 'stopped';
+    const e2eCurrentResolver = String(job.e2e_current_resolver || '').trim();
+    const livePassedResolvers = this.e2ePassedResolversFromJob(job);
+    const runningLike = ['queued', 'running', 'paused'].includes(status);
     const lines: string[] = [];
     const pad = (value: string, width: number, left = false): string => {
       const clean = String(value || '');
@@ -430,8 +516,22 @@ class SettingsView {
     } else {
       lines.push(`Running E2E... ${e2eTested}/${e2eTotal || total}  (passed: ${e2ePassed})`);
     }
+    if (e2eCurrentResolver && runningLike && status !== 'paused' && controlState !== 'paused') {
+      lines.push(`${this.t('settings.resolver_scan_testing', 'Testing resolver')}: ${e2eCurrentResolver} ...`);
+    }
     if (e2eTotal > 0 && resultMode !== 'e2e') {
       lines.push(`E2E... ${e2eTested}/${e2eTotal}  (passed: ${e2ePassed})`);
+    }
+    if (livePassedResolvers.length && (resultMode === 'e2e' || phaseKind === 'e2e' || e2eTotal > 0)) {
+      lines.push('');
+      lines.push(`${this.t('settings.resolver_scan_passed_live', 'Passed resolvers')} (${livePassedResolvers.length}):`);
+      lines.push('');
+      for (const resolver of livePassedResolvers.slice(0, 24)) {
+        lines.push(`* ${resolver}`);
+      }
+      if (livePassedResolvers.length > 24) {
+        lines.push(`... +${livePassedResolvers.length - 24} more`);
+      }
     }
     if (status === 'paused' || controlState === 'paused') {
       lines.push(this.t('settings.resolver_scan_paused', 'Paused by user.'));
@@ -697,6 +797,32 @@ class SettingsView {
     document.body.removeChild(a);
     URL.revokeObjectURL(href);
     this.showFlash(this.t('settings.resolver_scan_saved_file', 'Scan result exported to txt.'), 'success');
+  }
+
+  private async loadLastResolverScanResult(): Promise<void> {
+    const payload = await this.fetchJson('/dns/resolvers/scan/latest');
+    if (!payload.ok) {
+      this.showFlash(this.t('settings.resolver_scan_load_last_empty', 'No saved scan result found yet.'), 'error');
+      return;
+    }
+    const job = (payload.job as Record<string, unknown> | undefined) || {};
+    if (!Object.keys(job).length) {
+      this.showFlash(this.t('settings.resolver_scan_load_last_empty', 'No saved scan result found yet.'), 'error');
+      return;
+    }
+
+    this.resolverScanJobId = String(job.id || this.resolverScanJobId || '');
+    this.renderResolverScanJob(job);
+
+    const status = String(job.status || '');
+    const active = ['queued', 'running', 'paused'].includes(status);
+    this.setResolverScanBusy(active);
+
+    if (active && this.resolverScanJobId) {
+      await this.pollResolverScan(true);
+    }
+
+    this.showFlash(this.t('settings.resolver_scan_load_last_done', 'Last scan result loaded.'), 'success');
   }
 
   private async restoreResolverScanJobFromBackend(): Promise<void> {
@@ -1304,6 +1430,12 @@ class SettingsView {
     });
     this.resolverRunE2eBtn?.addEventListener('click', () => {
       void this.startResolverE2E();
+    });
+    this.resolverLoadLastBtn?.addEventListener('click', () => {
+      void this.loadLastResolverScanResult();
+    });
+    this.resolverSetPassedBtn?.addEventListener('click', () => {
+      this.setPassedResolversToUi();
     });
     this.resolverSaveBtn?.addEventListener('click', () => {
       this.saveResolverScanResultAsTxt();

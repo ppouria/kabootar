@@ -64,8 +64,8 @@ Output:
 `...-web` binary supports flags and interactive prompts:
 
 ```bash
-./Kabootar-client-linux-amd64-web-v0.7.0 --help
-./Kabootar-client-linux-amd64-web-v0.7.0 \
+./Kabootar-client-linux-amd64-web-v0.7.2 --help
+./Kabootar-client-linux-amd64-web-v0.7.2 \
   --domain v.example.com \
   --resolver 45.159.150.50:53 \
   --app-port 8090 \

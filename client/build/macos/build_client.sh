@@ -44,10 +44,16 @@ python3 -m PyInstaller \
   --windowed \
   --name kabootar-darwin \
   --icon build/macos/kabootar.icns \
+  --paths "vendor/python" \
+  --hidden-import persian_encoder \
+  --hidden-import persian_encoder.seed_words \
+  --hidden-import persian_encoder.large_words \
   --add-data "../version.properties:." \
   --add-data "frontend/templates:frontend/templates" \
   --add-data "frontend/static:frontend/static" \
   --add-data "app/db/alembic:app/db/alembic" \
+  --add-data "vendor/python/persian_encoder/data:persian_encoder/data" \
+  --collect-all persian_encoder \
   desktop_client.py
 
 OUT_NAME="Kabootar-client-darwin-${OUT_ARCH}-${VERSION_TAG}"

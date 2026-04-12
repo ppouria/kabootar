@@ -33,6 +33,8 @@ class SettingsView {
         this.resolverResumeBtn = document.getElementById('resolverResumeBtn');
         this.resolverStopBtn = document.getElementById('resolverStopBtn');
         this.resolverRunE2eBtn = document.getElementById('resolverRunE2eBtn');
+        this.resolverLoadLastBtn = document.getElementById('resolverLoadLastBtn');
+        this.resolverSetPassedBtn = document.getElementById('resolverSetPassedBtn');
         this.resolverSaveBtn = document.getElementById('resolverSaveBtn');
         this.resolverSortSelect = document.getElementById('resolverSort');
         this.resolverScanOnlyCheckbox = document.getElementById('resolverScanOnly');
@@ -233,6 +235,55 @@ class SettingsView {
         }
         return out;
     }
+    passedResolversFromResult(result) {
+        if (!result)
+            return [];
+        const mode = String(result.mode || '').trim().toLowerCase();
+        let rows = [];
+        if (mode === 'e2e') {
+            rows = Array.isArray(result.results) ? result.results : [];
+        }
+        else {
+            const e2e = (result.e2e && typeof result.e2e === 'object') ? result.e2e : null;
+            rows = e2e && Array.isArray(e2e.results) ? e2e.results : [];
+        }
+        const out = [];
+        const seen = new Set();
+        for (const item of rows) {
+            if (!item || !item.ok)
+                continue;
+            const resolver = String(item.resolver || '').trim();
+            if (!resolver || seen.has(resolver))
+                continue;
+            seen.add(resolver);
+            out.push(resolver);
+        }
+        return out;
+    }
+    e2ePassedResolversFromJob(job) {
+        if (!job)
+            return [];
+        const out = [];
+        const seen = new Set();
+        const addToken = (token) => {
+            const parsed = this.parseResolverToken(String(token || '').trim());
+            if (!parsed)
+                return;
+            const canonical = this.canonicalResolver(parsed.host, parsed.port);
+            if (!canonical || seen.has(canonical))
+                return;
+            seen.add(canonical);
+            out.push(canonical);
+        };
+        if (Array.isArray(job.e2e_passed_resolvers)) {
+            for (const token of job.e2e_passed_resolvers)
+                addToken(token);
+        }
+        const result = (job.result && typeof job.result === 'object') ? job.result : null;
+        for (const token of this.passedResolversFromResult(result))
+            addToken(token);
+        return out;
+    }
     syncResolverScanOptionState() {
         if (!this.resolverScanAutoApplyCheckbox)
             return;
@@ -257,11 +308,20 @@ class SettingsView {
             this.resolverResumeBtn.disabled = !active || !paused;
         if (this.resolverStopBtn)
             this.resolverStopBtn.disabled = !active;
+        if (this.resolverLoadLastBtn)
+            this.resolverLoadLastBtn.disabled = active;
         const hasScanCandidates = this.scanCompatibleResolvers(this.resolverScanLastScanResult).length > 0;
         if (this.resolverRunE2eBtn)
             this.resolverRunE2eBtn.disabled = active || !hasScanCandidates;
         if (this.resolverSaveBtn)
             this.resolverSaveBtn.disabled = !this.resolverScanLastResult;
+        const hasPassed = this.e2ePassedResolversFromJob(this.resolverScanLastJob).length > 0;
+        const finished = !active && ['done', 'stopped'].includes(status);
+        const canSetPassed = finished && hasPassed;
+        if (this.resolverSetPassedBtn) {
+            this.resolverSetPassedBtn.hidden = !canSetPassed;
+            this.resolverSetPassedBtn.disabled = !canSetPassed;
+        }
     }
     renderResolverTop(result) {
         if (!this.resolverScanTop || !this.resolverScanTopRows)
@@ -376,6 +436,33 @@ class SettingsView {
         this.serializeToHidden();
         this.setResolverScanInputValues(clean);
     }
+    setPassedResolversToUi() {
+        const passed = this.e2ePassedResolversFromJob(this.resolverScanLastJob);
+        if (!passed.length) {
+            this.showFlash(this.t('settings.resolver_scan_set_passed_empty', 'No passed resolver available yet.'), 'error');
+            return;
+        }
+        const existing = this.configuredResolversFromUi();
+        const merged = [];
+        const seen = new Set();
+        for (const token of [...passed, ...existing]) {
+            const parsed = this.parseResolverToken(token);
+            if (!parsed)
+                continue;
+            const canonical = this.canonicalResolver(parsed.host, parsed.port);
+            if (!canonical || seen.has(canonical))
+                continue;
+            seen.add(canonical);
+            merged.push(canonical);
+        }
+        if (!merged.length) {
+            this.showFlash(this.t('settings.resolver_scan_set_passed_empty', 'No passed resolver available yet.'), 'error');
+            return;
+        }
+        this.applyAutoResolversToUi(merged);
+        this.showFlash(`${this.t('settings.resolver_scan_set_passed_done', 'Passed resolvers added to resolver list.')}: ${passed.length}`, 'success');
+        this.syncResolverScanActionState();
+    }
     renderResolverScanJob(job) {
         const status = String(job.status || '');
         const controlState = String(job.control_state || '');
@@ -405,6 +492,9 @@ class SettingsView {
         const compatible = resultMode === 'e2e' ? [] : this.sortedCompatible(result);
         const e2eRows = Array.isArray(result.results) ? result.results : [];
         const stopped = !!job.stopped || !!result.stopped || status === 'stopped';
+        const e2eCurrentResolver = String(job.e2e_current_resolver || '').trim();
+        const livePassedResolvers = this.e2ePassedResolversFromJob(job);
+        const runningLike = ['queued', 'running', 'paused'].includes(status);
         const lines = [];
         const pad = (value, width, left = false) => {
             const clean = String(value || '');
@@ -432,8 +522,22 @@ class SettingsView {
         else {
             lines.push(`Running E2E... ${e2eTested}/${e2eTotal || total}  (passed: ${e2ePassed})`);
         }
+        if (e2eCurrentResolver && runningLike && status !== 'paused' && controlState !== 'paused') {
+            lines.push(`${this.t('settings.resolver_scan_testing', 'Testing resolver')}: ${e2eCurrentResolver} ...`);
+        }
         if (e2eTotal > 0 && resultMode !== 'e2e') {
             lines.push(`E2E... ${e2eTested}/${e2eTotal}  (passed: ${e2ePassed})`);
+        }
+        if (livePassedResolvers.length && (resultMode === 'e2e' || phaseKind === 'e2e' || e2eTotal > 0)) {
+            lines.push('');
+            lines.push(`${this.t('settings.resolver_scan_passed_live', 'Passed resolvers')} (${livePassedResolvers.length}):`);
+            lines.push('');
+            for (const resolver of livePassedResolvers.slice(0, 24)) {
+                lines.push(`* ${resolver}`);
+            }
+            if (livePassedResolvers.length > 24) {
+                lines.push(`... +${livePassedResolvers.length - 24} more`);
+            }
         }
         if (status === 'paused' || controlState === 'paused') {
             lines.push(this.t('settings.resolver_scan_paused', 'Paused by user.'));
@@ -695,6 +799,27 @@ class SettingsView {
         document.body.removeChild(a);
         URL.revokeObjectURL(href);
         this.showFlash(this.t('settings.resolver_scan_saved_file', 'Scan result exported to txt.'), 'success');
+    }
+    async loadLastResolverScanResult() {
+        const payload = await this.fetchJson('/dns/resolvers/scan/latest');
+        if (!payload.ok) {
+            this.showFlash(this.t('settings.resolver_scan_load_last_empty', 'No saved scan result found yet.'), 'error');
+            return;
+        }
+        const job = payload.job || {};
+        if (!Object.keys(job).length) {
+            this.showFlash(this.t('settings.resolver_scan_load_last_empty', 'No saved scan result found yet.'), 'error');
+            return;
+        }
+        this.resolverScanJobId = String(job.id || this.resolverScanJobId || '');
+        this.renderResolverScanJob(job);
+        const status = String(job.status || '');
+        const active = ['queued', 'running', 'paused'].includes(status);
+        this.setResolverScanBusy(active);
+        if (active && this.resolverScanJobId) {
+            await this.pollResolverScan(true);
+        }
+        this.showFlash(this.t('settings.resolver_scan_load_last_done', 'Last scan result loaded.'), 'success');
     }
     async restoreResolverScanJobFromBackend() {
         const payload = await this.fetchJson('/dns/resolvers/scan/status');
@@ -1292,6 +1417,12 @@ class SettingsView {
         });
         this.resolverRunE2eBtn?.addEventListener('click', () => {
             void this.startResolverE2E();
+        });
+        this.resolverLoadLastBtn?.addEventListener('click', () => {
+            void this.loadLastResolverScanResult();
+        });
+        this.resolverSetPassedBtn?.addEventListener('click', () => {
+            this.setPassedResolversToUi();
         });
         this.resolverSaveBtn?.addEventListener('click', () => {
             this.saveResolverScanResultAsTxt();

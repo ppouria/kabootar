@@ -646,6 +646,7 @@ def scan_dns_resolvers(
                     target = key_to_target.get(key)
                     if not target:
                         continue
+                    _emit_progress(progress, kind="e2e_testing", resolver=display)
                     future = executor.submit(_scan_e2e_probe_target, target, e2e_domain, scan_password, control)
                     pending_e2e[future] = display
 
@@ -810,6 +811,7 @@ def run_e2e_resolver_tests(
                 target = targets[index]
                 index += 1
                 display = _resolver_display_key(target)
+                _emit_progress(progress, kind="e2e_testing", resolver=display)
                 future = executor.submit(_scan_e2e_probe_target, target, scan_domain, scan_password, control)
                 pending[future] = display
 

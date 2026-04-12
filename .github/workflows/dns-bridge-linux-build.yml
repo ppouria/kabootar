@@ -90,7 +90,12 @@ jobs:
             --clean \
             --onefile \
             --name kabootar-dns-bridge \
+            --paths "../client/vendor/python" \
+            --hidden-import persian_encoder \
+            --hidden-import persian_encoder.seed_words \
+            --hidden-import persian_encoder.large_words \
             --add-data "../version.properties:." \
+            --add-data "../client/vendor/python/persian_encoder/data:persian_encoder/data" \
             --collect-all persian_encoder \
             manage.py
 
@@ -147,7 +152,12 @@ jobs:
             --clean \
             --onefile \
             --name kabootar-dns-bridge \
+            --paths "../client/vendor/python" \
+            --hidden-import persian_encoder \
+            --hidden-import persian_encoder.seed_words \
+            --hidden-import persian_encoder.large_words \
             --add-data "../version.properties:." \
+            --add-data "../client/vendor/python/persian_encoder/data:persian_encoder/data" \
             --collect-all persian_encoder \
             manage.py
 

@@ -377,6 +377,30 @@ class MirrorApp {
             autoPin = false;
         }, 900);
     }
+    reorderSidebarChannelsByLatest() {
+        const sidebar = document.getElementById('sidebar');
+        if (!sidebar)
+            return;
+        const rows = [...sidebar.querySelectorAll('.channel')];
+        if (!rows.length)
+            return;
+        rows.sort((a, b) => {
+            const latestA = Math.max(0, Number(a.dataset.latestId || 0) || 0);
+            const latestB = Math.max(0, Number(b.dataset.latestId || 0) || 0);
+            if (latestA !== latestB)
+                return latestB - latestA;
+            const activeA = a.classList.contains('active') ? 1 : 0;
+            const activeB = b.classList.contains('active') ? 1 : 0;
+            if (activeA !== activeB)
+                return activeB - activeA;
+            const keyA = String(a.dataset.channelKey || '').toLowerCase();
+            const keyB = String(b.dataset.channelKey || '').toLowerCase();
+            return keyA.localeCompare(keyB);
+        });
+        for (const row of rows) {
+            sidebar.appendChild(row);
+        }
+    }
     setupScrollToBottomButton() {
         const wrap = document.getElementById('messages');
         const button = document.getElementById('scrollToBottomBtn');
@@ -1405,10 +1429,31 @@ class MirrorApp {
         wrap.innerHTML = payload.messages_html || '';
         if (searchToggle)
             searchToggle.disabled = !!payload.search_disabled;
-        const activeRow = [...document.querySelectorAll('.channel')].find((el) => el.dataset.channelKey === this.selected);
-        if (activeRow) {
-            activeRow.dataset.latestId = String(Math.max(0, Number(payload.latest_id || 0) || 0));
+        const latestBySourceRaw = payload.latest_by_source && typeof payload.latest_by_source === 'object'
+            ? payload.latest_by_source
+            : {};
+        const latestBySource = latestBySourceRaw;
+        const rows = [...document.querySelectorAll('.channel')];
+        const rowByKey = new Map();
+        for (const row of rows) {
+            const key = String(row.dataset.channelKey || '').trim();
+            if (!key)
+                continue;
+            rowByKey.set(key, row);
         }
+        for (const [key, rawLatest] of Object.entries(latestBySource)) {
+            const row = rowByKey.get(key);
+            if (!row)
+                continue;
+            row.dataset.latestId = String(Math.max(0, Number(rawLatest || 0) || 0));
+        }
+        if (this.selected) {
+            const activeRow = rowByKey.get(this.selected);
+            if (activeRow) {
+                activeRow.dataset.latestId = String(Math.max(0, Number(payload.latest_id || 0) || 0));
+            }
+        }
+        this.reorderSidebarChannelsByLatest();
         const readMap = this.loadReadMap();
         this.applyI18n(headerPrimary);
         this.applyI18n(wrap);

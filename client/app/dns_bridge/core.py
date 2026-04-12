@@ -48,6 +48,7 @@ from app.utils import (
 
 logger = logging.getLogger("kabootar.dns")
 ProgressCallback = Optional[Callable[[dict], None]]
+_HEX_RE = re.compile(r"^[0-9a-f]+$", re.IGNORECASE)
 
 
 def _emit_progress(progress: ProgressCallback, **payload) -> None:
@@ -1282,7 +1283,11 @@ def _query_meta(
                     use_fallback_resolvers=not strict_resolvers,
                 )[0]
             )
-            return _ensure_ok(meta_raw, f"meta:{domain}")
+            context = f"meta:{domain}"
+            meta_parts = _ensure_ok(meta_raw, context)
+            _require_fields(meta_parts, context, ("v", "n"))
+            _parse_int_field(meta_parts, "n", context, minimum=0)
+            return meta_parts
         except Exception as exc:
             last_exc = exc
             if "dns_query_failed:" not in str(exc) and "dns_query_failed_parallel:" not in str(exc):
@@ -1312,6 +1317,8 @@ def _query_payload_chunk(
         try:
             chunk = _query_txt(qname, resolver_targets)[0]
             chunk_text = _parse_txt(chunk)
+            if not chunk_text:
+                raise _protocol_retry_error(context, "empty_chunk")
             if chunk_text.startswith("ok=0;"):
                 _ensure_ok(chunk_text, context)
             return chunk
@@ -1396,9 +1403,25 @@ def _query_stage_bundle_meta(
     session: str,
     resolver_targets: list[DnsResolverTarget],
 ) -> dict[str, str]:
+    context = f"chan_{stage}_meta:{domain}:{channel_idx}:{bundle_idx}"
     qname = f"chan.{channel_idx}.{stage}.meta.{bundle_idx}.sz{qsz}.{client_id}.{session}.{domain}"
-    raw = _parse_txt(_query_txt(qname, resolver_targets)[0])
-    return _ensure_ok(raw, f"chan_{stage}_meta:{domain}:{channel_idx}:{bundle_idx}")
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = _parse_txt(_query_txt(qname, resolver_targets)[0])
+            parts = _ensure_ok(raw, context)
+            _require_fields(parts, context, ("parts", "len", "crc"))
+            _parse_int_field(parts, "parts", context, minimum=1)
+            _parse_int_field(parts, "len", context, minimum=1)
+            _parse_crc_field(parts, "crc", context)
+            return parts
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.18 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{context}:unknown")
 
 
 def _query_stage_bundle_part(
@@ -1439,6 +1462,68 @@ def _fetch_stage_bundle_payload(
     )
 
 
+def _query_channel_meta(
+    domain: str,
+    channel_idx: int,
+    qsz: int,
+    client_id: str,
+    session: str,
+    resolver_targets: list[DnsResolverTarget],
+) -> dict[str, str]:
+    context = f"chan_meta:{domain}:{channel_idx}"
+    qname = f"chan.{channel_idx}.meta.sz{qsz}.{client_id}.{session}.{domain}"
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            raw = _parse_txt(_query_txt(qname, resolver_targets)[0])
+            parts = _ensure_ok(raw, context)
+            return _validate_channel_meta_parts(parts, context)
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.18 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{context}:unknown")
+
+
+def _load_stage_bundle_payload(
+    *,
+    domain: str,
+    channel_idx: int,
+    stage: str,
+    bundle_idx: int,
+    qsz: int,
+    client_id: str,
+    session: str,
+    resolver_targets: list[DnsResolverTarget],
+    bundle_info: dict[str, str],
+) -> dict:
+    context = f"chan_{stage}_bundle:{domain}:{channel_idx}:{bundle_idx}"
+    n_parts = _parse_int_field(bundle_info, "parts", context, minimum=1)
+    expected_crc = _parse_crc_field(bundle_info, "crc", context)
+    last_exc: Exception | None = None
+
+    for attempt in range(3):
+        try:
+            buf = _fetch_stage_bundle_payload(domain, channel_idx, stage, bundle_idx, n_parts, qsz, client_id, session, resolver_targets)
+            actual_crc = f"{zlib.crc32(bytes(buf)) & 0xffffffff:08x}"
+            if actual_crc != expected_crc:
+                raise _protocol_retry_error(context, f"crc_mismatch_{actual_crc}")
+            payload_text = unpack_text(buf.decode("utf-8", errors="ignore"))
+            payload = json.loads(payload_text)
+            if not isinstance(payload, dict):
+                raise _protocol_retry_error(context, "invalid_json_root")
+            return payload
+        except Exception as exc:
+            last_exc = exc
+            if attempt < 2:
+                time.sleep(0.2 * (attempt + 1))
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError(f"{context}:unknown")
+
+
 def _parse_kv(raw: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for item in (raw or "").split(";"):
@@ -1455,9 +1540,58 @@ def _parse_txt(raw: bytes | str) -> str:
     return str(raw).strip()
 
 
+def _protocol_retry_error(context: str, reason: str) -> RuntimeError:
+    return RuntimeError(f"dns_query_failed:{context}:{reason}")
+
+
+def _require_fields(parts: dict[str, str], context: str, fields: tuple[str, ...]) -> None:
+    missing = [field for field in fields if not (parts.get(field, "") or "").strip()]
+    if missing:
+        raise _protocol_retry_error(context, f"invalid_payload_missing_{','.join(missing)}")
+
+
+def _parse_int_field(parts: dict[str, str], key: str, context: str, minimum: int = 0) -> int:
+    raw = (parts.get(key, "") or "").strip()
+    try:
+        value = int(raw)
+    except Exception as exc:
+        raise _protocol_retry_error(context, f"invalid_int_{key}") from exc
+    if value < minimum:
+        raise _protocol_retry_error(context, f"invalid_int_{key}")
+    return value
+
+
+def _parse_crc_field(parts: dict[str, str], key: str, context: str) -> str:
+    raw = (parts.get(key, "") or "").strip().lower()
+    if not raw or not _HEX_RE.fullmatch(raw):
+        raise _protocol_retry_error(context, f"invalid_crc_{key}")
+    return raw
+
+
+def _validate_channel_meta_parts(parts: dict[str, str], context: str) -> dict[str, str]:
+    if parts.get("v") == "2" or "tb" in parts or "mb" in parts:
+        _require_fields(parts, context, ("tb", "mb", "tm", "mm", "tc", "mc"))
+        _parse_int_field(parts, "tb", context, minimum=0)
+        _parse_int_field(parts, "mb", context, minimum=0)
+        _parse_int_field(parts, "tm", context, minimum=0)
+        _parse_int_field(parts, "mm", context, minimum=0)
+        _parse_crc_field(parts, "tc", context)
+        _parse_crc_field(parts, "mc", context)
+        return parts
+
+    _require_fields(parts, context, ("parts", "crc"))
+    _parse_int_field(parts, "parts", context, minimum=0)
+    _parse_crc_field(parts, "crc", context)
+    return parts
+
+
 def _ensure_ok(raw: bytes | str, context: str) -> dict[str, str]:
     text = _parse_txt(raw)
+    if not text:
+        raise _protocol_retry_error(context, "empty_txt")
     parts = _parse_kv(text)
+    if not parts:
+        raise _protocol_retry_error(context, "invalid_payload")
     if parts.get("ok") == "0":
         raise RuntimeError(f"{context}:{parts.get('err', 'unknown')}")
     return parts
@@ -1516,6 +1650,7 @@ def _get_session_for_domain(
         use_fallback_resolvers=not strict_resolvers,
     )[0]
     auth_parts = _ensure_ok(auth_raw, f"dns_auth:{domain_norm}")
+    _require_fields(auth_parts, f"dns_auth:{domain_norm}", ("s",))
 
     session = re.sub(r"[^a-z0-9]+", "", (auth_parts.get("s", "public") or "public").lower())
     if len(session) < 3:
@@ -1719,11 +1854,17 @@ def _sync_staged_channel(
     if need_text:
         for bundle_idx in range(1, text_bundle_total + 1):
             bundle_info = _query_stage_bundle_meta(domain, channel_index, "text", bundle_idx, qsz, client_id, session, resolver_targets)
-            n_parts = int(bundle_info.get("parts", "0") or 0)
-            if n_parts <= 0:
-                continue
-            buf = _fetch_stage_bundle_payload(domain, channel_index, "text", bundle_idx, n_parts, qsz, client_id, session, resolver_targets)
-            bundle_payload = json.loads(unpack_text(buf.decode("utf-8", errors="ignore")))
+            bundle_payload = _load_stage_bundle_payload(
+                domain=domain,
+                channel_idx=channel_index,
+                stage="text",
+                bundle_idx=bundle_idx,
+                qsz=qsz,
+                client_id=client_id,
+                session=session,
+                resolver_targets=resolver_targets,
+                bundle_info=bundle_info,
+            )
             source_url = normalize_tg_s_url(bundle_payload.get("source_url") or bundle_payload.get("username") or "")
             if not source_url:
                 continue
@@ -1800,11 +1941,17 @@ def _sync_staged_channel(
             ch = _ensure_channel_row(db, source_url=source_url)
         for bundle_idx in range(1, media_bundle_total + 1):
             bundle_info = _query_stage_bundle_meta(domain, channel_index, "media", bundle_idx, qsz, client_id, session, resolver_targets)
-            n_parts = int(bundle_info.get("parts", "0") or 0)
-            if n_parts <= 0:
-                continue
-            buf = _fetch_stage_bundle_payload(domain, channel_index, "media", bundle_idx, n_parts, qsz, client_id, session, resolver_targets)
-            bundle_payload = json.loads(unpack_text(buf.decode("utf-8", errors="ignore")))
+            bundle_payload = _load_stage_bundle_payload(
+                domain=domain,
+                channel_idx=channel_index,
+                stage="media",
+                bundle_idx=bundle_idx,
+                qsz=qsz,
+                client_id=client_id,
+                session=session,
+                resolver_targets=resolver_targets,
+                bundle_info=bundle_info,
+            )
             if not source_url:
                 source_url = normalize_tg_s_url(bundle_payload.get("source_url") or bundle_payload.get("username") or "")
             if ch is None and source_url:
@@ -2094,8 +2241,7 @@ def _sync_domain_target(
                 message_total = 0
                 try:
                     _emit_progress(progress, kind="channel_start", mode="dns", domain=domain, channel_index=i, channels_total=total)
-                    info_raw = _parse_txt(_query_txt(f"chan.{i}.meta.sz{qsz}.{client_id}.{session}.{domain}", resolver_targets)[0])
-                    info = _ensure_ok(info_raw, f"chan_meta:{domain}:{i}")
+                    info = _query_channel_meta(domain, i, qsz, client_id, session, resolver_targets)
                     state_key = f"{domain}|{i}"
                     cached = (channel_state or {}).get(state_key, {})
                     if info.get("v") == "2" or "tb" in info or "mb" in info:
