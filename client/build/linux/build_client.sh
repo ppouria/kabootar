@@ -24,9 +24,10 @@ python3 build/assets/prepare_logo_assets.py
 npm --prefix frontend ci
 npm --prefix frontend run build
 
-VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1)"
+VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1 | tr -d '\r\n')"
 VERSION_NAME="${VERSION_NAME:-0.0.0}"
-SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+SAFE_NAME="$(printf '%s' "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-' | sed 's/^-*//; s/-*$//')"
+SAFE_NAME="${SAFE_NAME:-0.0.0}"
 VERSION_TAG="v${SAFE_NAME}"
 
 ARCH_RAW="$(uname -m)"

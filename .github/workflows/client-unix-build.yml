@@ -51,9 +51,10 @@ jobs:
 
       - name: Read Version
         run: |
-          VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1)"
+          VERSION_NAME="$(sed -n 's/^version_name=//p' ../version.properties | head -n 1 | tr -d '\r\n')"
           VERSION_NAME="${VERSION_NAME:-0.0.0}"
-          SAFE_NAME="$(echo "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-')"
+          SAFE_NAME="$(printf '%s' "${VERSION_NAME}" | tr -cs '[:alnum:]._-' '-' | sed 's/^-*//; s/-*$//')"
+          SAFE_NAME="${SAFE_NAME:-0.0.0}"
           VERSION_TAG="v${SAFE_NAME}"
           echo "VERSION_TAG=${VERSION_TAG}" >> "${GITHUB_ENV}"
 
@@ -202,4 +203,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: client/dist/${{ env.DARWIN_OUT }}
-
