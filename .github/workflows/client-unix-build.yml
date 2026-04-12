@@ -110,6 +110,7 @@ jobs:
             --add-data "frontend/templates:frontend/templates" \
             --add-data "frontend/static:frontend/static" \
             --add-data "app/db/alembic:app/db/alembic" \
+            --collect-all persian_encoder \
             desktop_client.py
 
           python -m PyInstaller \
@@ -121,7 +122,13 @@ jobs:
             --add-data "frontend/templates:frontend/templates" \
             --add-data "frontend/static:frontend/static" \
             --add-data "app/db/alembic:app/db/alembic" \
+            --collect-all persian_encoder \
             web_client.py
+
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/kabootar-gui \
+            | grep -Eq 'persian_encoder[/\\]data[/\\]hazm_words\.tsv'
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/kabootar-web \
+            | grep -Eq 'persian_encoder[/\\]data[/\\]hazm_words\.tsv'
 
           GUI_OUT="Kabootar-client-linux-${{ matrix.out_arch }}-${VERSION_TAG}"
           WEB_OUT="Kabootar-client-linux-${{ matrix.out_arch }}-web-${VERSION_TAG}"
@@ -154,7 +161,11 @@ jobs:
             --add-data "frontend/templates:frontend/templates" \
             --add-data "frontend/static:frontend/static" \
             --add-data "app/db/alembic:app/db/alembic" \
+            --collect-all persian_encoder \
             desktop_client.py
+
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/kabootar-darwin \
+            | grep -Eq 'persian_encoder[/\\]data[/\\]hazm_words\.tsv'
 
           DARWIN_OUT="Kabootar-client-darwin-${OUT_ARCH}-${VERSION_TAG}"
           cp dist/kabootar-darwin "dist/${DARWIN_OUT}"

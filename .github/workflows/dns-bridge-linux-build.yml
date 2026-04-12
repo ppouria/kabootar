@@ -91,7 +91,11 @@ jobs:
             --onefile \
             --name kabootar-dns-bridge \
             --add-data "../version.properties:." \
+            --collect-all persian_encoder \
             manage.py
+
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/kabootar-dns-bridge \
+            | grep -Eq 'persian_encoder[/\\]data[/\\]hazm_words\.tsv'
 
           OUT_NAME="Kabootar-dns-bridge-amd64-${VERSION_TAG}"
           cp dist/kabootar-dns-bridge "dist/${OUT_NAME}"
@@ -144,7 +148,11 @@ jobs:
             --onefile \
             --name kabootar-dns-bridge \
             --add-data "../version.properties:." \
+            --collect-all persian_encoder \
             manage.py
+
+          python -m PyInstaller.utils.cliutils.archive_viewer -l dist/kabootar-dns-bridge \
+            | grep -Eq 'persian_encoder[/\\]data[/\\]hazm_words\.tsv'
 
           OUT_NAME="Kabootar-dns-bridge-arm64-${VERSION_TAG}"
           cp dist/kabootar-dns-bridge "dist/${OUT_NAME}"

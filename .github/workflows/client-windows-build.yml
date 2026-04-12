@@ -123,10 +123,19 @@ jobs:
             "--add-data", "frontend\templates;frontend\templates"
             "--add-data", "frontend\static;frontend\static"
             "--add-data", "app\\db\\alembic;app\\db\\alembic"
+            "--collect-all", "persian_encoder"
             "desktop_client.py"
           )
           python -m PyInstaller @args
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Verify Persian Encoder Data In EXE (${{ matrix.label }})
+        run: |
+          $archiveList = python -m PyInstaller.utils.cliutils.archive_viewer -l dist\kabootar.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($archiveList -notmatch "persian_encoder[\\/]+data[\\/]+hazm_words\.tsv") {
+            throw "Missing persian_encoder data file (hazm_words.tsv) in built EXE."
+          }
 
       - name: Prepare Versioned EXE (${{ matrix.label }})
         run: Copy-Item dist\kabootar.exe "dist\${{ env.OUT_FILE }}" -Force
